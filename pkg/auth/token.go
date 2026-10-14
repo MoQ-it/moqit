@@ -30,6 +30,11 @@ type RoomGrant struct {
 	PublishSources    []string `json:"publishSources,omitempty"` // camera, microphone, screen, screen-audio; empty = all
 	UpdateOwnMetadata bool     `json:"updateOwnMetadata,omitempty"`
 	Hidden            bool     `json:"hidden,omitempty"`
+
+	// Viewer lets the holder watch Room read-only: it may subscribe to the
+	// room track and to participants' tracks, but never publishes and is
+	// not a participant. It takes precedence over Join.
+	Viewer bool `json:"viewer,omitempty"`
 }
 
 // Grants are the permissions in a token.
@@ -53,6 +58,11 @@ type Claims struct {
 
 // Identity is the participant identity (the JWT subject).
 func (c *Claims) Identity() string { return c.Subject }
+
+// IsViewer reports whether the token grants read-only viewing of a room.
+func (c *Claims) IsViewer() bool {
+	return c.Grants.Room != nil && c.Grants.Room.Viewer && c.Grants.Room.Room != ""
+}
 
 // Source names used in PublishSources.
 var sourceNames = map[string]moqitv1.TrackSource{
@@ -151,6 +161,9 @@ func (t *AccessToken) ToJWT() (string, error) {
 	if g := t.claims.Grants.Room; g != nil {
 		if g.Join && (t.claims.Subject == "" || g.Room == "") {
 			return "", errors.New("auth: a join grant needs an identity and a room")
+		}
+		if g.Viewer && g.Room == "" {
+			return "", errors.New("auth: a viewer grant needs a room")
 		}
 		if _, err := g.Permission(); err != nil {
 			return "", err

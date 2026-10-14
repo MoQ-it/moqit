@@ -39,8 +39,8 @@ type Room struct {
 	clusterQ    chan func(context.Context)
 	stopCluster context.CancelFunc
 
-	speakers     speakers
-	stopSpeakers chan struct{}
+	speakers  speakers
+	stopLoops chan struct{} // closed when the room closes
 }
 
 // newRoom creates a room on this node. settings, if set, come from
@@ -69,10 +69,11 @@ func newRoom(m *Manager, name string, settings *moqitv1.Room) *Room {
 		ready:        make(chan struct{}),
 		participants: map[string]*Participant{},
 		remote:       map[string]*moqitv1.ParticipantInfo{},
-		stopSpeakers: make(chan struct{}),
+		stopLoops:    make(chan struct{}),
 	}
 	go r.init()
-	go r.publishSpeakers(r.stopSpeakers)
+	go r.publishSpeakers(r.stopLoops)
+	go r.publishViewers(r.stopLoops)
 	return r
 }
 
@@ -493,7 +494,7 @@ func (r *Room) closeIfEmpty() {
 	}
 	r.closed = true
 	r.state.close()
-	close(r.stopSpeakers)
+	close(r.stopLoops)
 	stop := r.stopCluster
 	info := proto.CloneOf(r.info)
 	r.mu.Unlock()

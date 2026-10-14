@@ -69,7 +69,7 @@ select:disabled { opacity: 0.5; }
 .meeting.with-chat { grid-template: "header header" auto "stage chat" 1fr "footer footer" auto / 1fr 320px; }
 .meeting header { grid-area: header; display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--panel); flex-wrap: wrap; }
 .room-code { font-weight: 600; letter-spacing: 0.5px; }
-.count, .status { color: var(--muted); }
+.count, .viewers, .status { color: var(--muted); }
 .stage { grid-area: stage; padding: 12px; overflow: hidden; min-height: 0; }
 .meeting aside { grid-area: chat; background: var(--panel); border-left: 1px solid #2c313c; min-height: 0; }
 .meeting footer { grid-area: footer; padding: 10px; background: var(--panel); }
@@ -184,3 +184,7 @@ select:disabled { opacity: 0.5; }
 .quality-note { color: var(--muted); font-size: 0.8rem; margin-top: -6px; }
 .moqit-meeting-stats { color: var(--muted); font: 0.8rem/1.4 ui-monospace, monospace; margin-left: auto; }
 .moqit-presenting-preview { position: relative; }
+
+/* watch (read-only viewer) */
+.watch .badge { background: var(--accent); color: white; border-radius: 6px; padding: 2px 8px; font-size: 0.8rem; }
+.watch header .leave { margin-left: auto; background: var(--danger); border-color: var(--danger); color: white; }

@@ -1,9 +1,9 @@
 // Subscribing: receive, decode and render remote tracks.
 
-import type { Session, Subscription } from "@moq-it/moqt";
+import { RequestError, type Session, type Subscription } from "@moq-it/moqt";
 import { eachObject } from "./util.ts";
 import { type TrackInfo, TrackKind, TrackSource } from "./gen/moqit/v1/models_pb.ts";
-import { captureClock, Emitter, participantNamespace, RateMeter, type VideoQuality } from "./util.ts";
+import { captureClock, Emitter, participantNamespace, RateMeter, retryDelay, sleep, type VideoQuality } from "./util.ts";
 
 const SAMPLE_RATE = 48000;
 const MAX_HOLD_MS = 500; // longest a video frame waits for its audio
@@ -20,6 +20,7 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
   info: TrackInfo;
   track?: RemoteTrack;
   private wantSubscribed = false;
+  private closed = false;
   // Rendition choice: an explicit setVideoQuality wins; otherwise the
   // rendered size picks it (adaptive stream), lowered by congestion.
   private manual?: VideoQuality;
@@ -111,6 +112,23 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
   }
 
   /**
+   * @internal Subscribes, retrying with backoff while the track is wanted
+   * but can't be served yet (e.g. a viewer's node hasn't found its
+   * publisher).
+   */
+  async subscribeRetrying(): Promise<void> {
+    for (let attempt = 0; !this.closed && !this.track; attempt++) {
+      try {
+        return await this.setSubscribed(true);
+      } catch (e) {
+        if (!(e instanceof RequestError)) console.warn("moqit: subscribe failed", e);
+      }
+      await sleep(retryDelay(attempt));
+      if (!this.wantSubscribed) return;
+    }
+  }
+
+  /**
    * Pins the rendition (simulcast layer), turning off size-based choice
    * for this track; pass undefined to return to automatic.
    */
@@ -179,6 +197,7 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
 
   /** @internal */
   close() {
+    this.closed = true;
     this.wantSubscribed = false;
     clearTimeout(this.relax);
     void this.setSubscribed(false);
@@ -221,6 +240,7 @@ export class RemoteVideoTrack {
   private draw?: (f: VideoFrame) => void;
   private stopped = false;
   private generation = 0;
+  private trackName = "";
   private paused = false;
   private inFlight?: { cancel(): void };
   private observers: { disconnect(): void }[] = [];
@@ -294,9 +314,26 @@ export class RemoteVideoTrack {
     if (!this.session || this.stopped) return;
     const old = this.sub;
     const gen = ++this.generation;
+    this.trackName = trackName;
     const sub = await this.session.subscribe({ namespace: this.ns, name: trackName }, startParams);
     this.sub = sub;
-    void this.consume(sub, gen, () => old?.unsubscribe());
+    void this.consume(sub, gen, () => old?.unsubscribe()).catch(() => {}).finally(() => {
+      // The track ended without our asking: its publisher moved, or the
+      // node serving it went away. Subscribe again while it is wanted.
+      if (gen === this.generation && !this.stopped) void this.resubscribe(gen);
+    });
+  }
+
+  private async resubscribe(gen: number) {
+    for (let attempt = 0; gen === this.generation && !this.stopped; attempt++) {
+      await sleep(retryDelay(attempt));
+      if (gen !== this.generation || this.stopped) return;
+      try {
+        return await this.switchTo(this.trackName);
+      } catch {
+        // not served yet; try again
+      }
+    }
   }
 
   private async consume(sub: Subscription, gen: number, onFirst: () => void) {
@@ -462,6 +499,7 @@ export class RemoteAudioTrack {
   private decoder?: AudioDecoder;
   private sub?: Subscription;
   private sink?: AudioSink;
+  private stopped = false;
 
   constructor(readonly info: TrackInfo, private output: AudioOutput) {}
 
@@ -482,8 +520,25 @@ export class RemoteAudioTrack {
       error: (e) => console.warn("moqit: audio decoder error", e),
     });
     this.decoder.configure({ codec: "opus", sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
-    this.sub = await session.subscribe({ namespace: ns, name: trackName }, startParams);
-    void this.consume(this.sub);
+    await this.follow(session, ns, trackName);
+  }
+
+  // Subscribes, and again whenever the subscription ends while playing.
+  private async follow(session: Session, ns: string[], trackName: string) {
+    if (this.stopped) return;
+    const sub = await session.subscribe({ namespace: ns, name: trackName }, startParams);
+    this.sub = sub;
+    void this.consume(sub).catch(() => {}).finally(async () => {
+      for (let attempt = 0; !this.stopped && this.sub === sub; attempt++) {
+        await sleep(retryDelay(attempt));
+        if (this.stopped || this.sub !== sub) return;
+        try {
+          return await this.follow(session, ns, trackName);
+        } catch {
+          // not served yet; try again
+        }
+      }
+    });
   }
 
   private async consume(sub: Subscription) {
@@ -509,6 +564,7 @@ export class RemoteAudioTrack {
 
   /** @internal */
   stop() {
+    this.stopped = true;
     this.sub?.unsubscribe();
     try {
       this.decoder?.close();

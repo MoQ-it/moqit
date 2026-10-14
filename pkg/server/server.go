@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log/slog"
 	"math/big"
+	mrand "math/rand/v2"
 	"net"
 	"net/http"
 	"slices"
@@ -66,6 +67,18 @@ type Config struct {
 	ExposeCertHash bool
 	// Webhook receives room and participant events; *webhook.Notifier.
 	Webhook room.Notifier
+
+	// Edge makes the node serve read-only viewers only, fetching every
+	// track from the cluster's other nodes. It needs Cluster.
+	Edge bool
+	// Tier places an edge in a cascade: 1 (the default) fetches from the
+	// nodes hosting tracks, 2 and up from an edge one tier up, preferring
+	// one in Region. Viewers are routed to the deepest tier.
+	Tier int
+	// MaxViewers caps viewer sessions on this node; 0 = unlimited.
+	MaxViewers int
+	// ViewerInterval is how often viewer counts are shared (default 5s).
+	ViewerInterval time.Duration
 }
 
 // Server is a running node.
@@ -77,6 +90,7 @@ type Server struct {
 	CertHash [32]byte
 
 	publicURL      string
+	edge           bool
 	exposeCertHash bool
 	cluster        *cluster.Cluster
 	keys           auth.KeyProvider
@@ -97,6 +111,12 @@ const (
 func Start(ctx context.Context, cfg Config) (*Server, error) {
 	if len(cfg.Keys) == 0 {
 		return nil, errors.New("server: no API keys")
+	}
+	if cfg.Edge && cfg.Cluster == nil {
+		return nil, errors.New("server: an edge node needs a cluster")
+	}
+	if cfg.Tier != 0 && !cfg.Edge {
+		return nil, errors.New("server: only edge nodes have a tier")
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
@@ -127,6 +147,7 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		Webhook:  cfg.Webhook,
 		Node:     cluster.NodeInfo{QUICAddr: cfg.AdvertiseAddr, PublicURL: cfg.PublicURL, CertSHA256: hex.EncodeToString(certHash[:]), Region: cfg.Region},
 		DialPeer: dialPeer,
+		Edge:     cfg.Edge, Tier: cfg.Tier, MaxViewers: cfg.MaxViewers, ViewerInterval: cfg.ViewerInterval,
 	})
 
 	tlsConf := &tls.Config{GetCertificate: certs.get, NextProtos: []string{v22.ALPN, http3.NextProtoH3}}
@@ -194,7 +215,7 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, err
 	}
 	go certs.watch(ctx, log, func(h [32]byte) { m.SetCertSHA256(hex.EncodeToString(h[:])) })
-	return &Server{Manager: m, Addr: ln.Addr(), CertHash: certHash, publicURL: cfg.PublicURL, exposeCertHash: cfg.ExposeCertHash, cluster: cfg.Cluster, keys: cfg.Keys, ln: ln, wts: wts, cancel: cancel}, nil
+	return &Server{Manager: m, Addr: ln.Addr(), CertHash: certHash, publicURL: cfg.PublicURL, edge: cfg.Edge, exposeCertHash: cfg.ExposeCertHash, cluster: cfg.Cluster, keys: cfg.Keys, ln: ln, wts: wts, cancel: cancel}, nil
 }
 
 // dialPeer opens a raw QUIC MoQ connection to a node, accepting only the
@@ -237,8 +258,10 @@ func (s *Server) APIHandler() http.Handler {
 
 // RouteHandler serves GET /v1/route?token=... (or Authorization: Bearer):
 // it returns {"url": ...}, the WebTransport URL of the node the client
-// should join, preferring nodes already hosting the token's room, then the
-// least loaded. Without a cluster it returns this node.
+// should join. Participants go to a node already hosting the token's room,
+// otherwise the least loaded, never an edge. Viewers go to an edge with
+// spare capacity, preferring ?region=, or else where a participant would.
+// Without a cluster it returns this node.
 func (s *Server) RouteHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -247,7 +270,7 @@ func (s *Server) RouteHandler() http.Handler {
 			token = strings.TrimPrefix(h, "Bearer ")
 		}
 		claims, err := s.keys.Verify(token)
-		if err != nil || claims.Grants.Room == nil || !claims.Grants.Room.Join {
+		if err != nil || claims.Grants.Room == nil || (!claims.Grants.Room.Join && !claims.IsViewer()) {
 			http.Error(w, "invalid token", http.StatusUnauthorized)
 			return
 		}
@@ -256,11 +279,19 @@ func (s *Server) RouteHandler() http.Handler {
 			out["certHash"] = hex.EncodeToString(s.CertHash[:])
 		}
 		if s.cluster != nil {
-			if n, err := s.pickNode(r.Context(), claims.Grants.Room.Room); err == nil && n != nil {
+			n, err := s.route(r.Context(), claims, r.URL.Query().Get("region"))
+			switch {
+			case n != nil:
 				out["url"] = n.PublicURL
 				if s.exposeCertHash {
 					out["certHash"] = n.CertSHA256
 				}
+			case s.edge && !claims.IsViewer():
+				if err == nil {
+					err = errors.New("no node hosts participants")
+				}
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -268,10 +299,72 @@ func (s *Server) RouteHandler() http.Handler {
 	})
 }
 
-func (s *Server) pickNode(ctx context.Context, room string) (*cluster.NodeInfo, error) {
+func (s *Server) route(ctx context.Context, claims *auth.Claims, region string) (*cluster.NodeInfo, error) {
 	nodes, err := s.cluster.Nodes(ctx)
 	if err != nil || len(nodes) == 0 {
 		return nil, err
+	}
+	if claims.IsViewer() {
+		if n := pickEdge(nodes, region); n != nil {
+			return n, nil
+		}
+	}
+	return s.pickNode(ctx, nodes, claims.Grants.Room.Room)
+}
+
+// unlimitedEdge is the capacity routing assumes for an edge without
+// MaxViewers.
+const unlimitedEdge = 10000
+
+// pickEdge picks an edge of the deepest tier at random, weighted by its
+// spare capacity, so a burst of viewers spreads out even though the load
+// figures lag.
+func pickEdge(nodes []cluster.NodeInfo, region string) *cluster.NodeInfo {
+	var edges, local []cluster.NodeInfo
+	for _, n := range nodes {
+		if n.Role != cluster.RoleEdge || (n.MaxViewers > 0 && n.Viewers >= n.MaxViewers) {
+			continue
+		}
+		edges = append(edges, n)
+		if region != "" && n.Region == region {
+			local = append(local, n)
+		}
+	}
+	if len(local) > 0 {
+		edges = local
+	}
+	deepest := 0
+	for _, n := range edges {
+		deepest = max(deepest, n.Tier)
+	}
+	edges = slices.DeleteFunc(edges, func(n cluster.NodeInfo) bool { return n.Tier != deepest })
+	spare := func(n cluster.NodeInfo) int {
+		c := n.MaxViewers
+		if c == 0 {
+			c = unlimitedEdge
+		}
+		return max(c-n.Viewers, 1)
+	}
+	total := 0
+	for _, n := range edges {
+		total += spare(n)
+	}
+	if total == 0 {
+		return nil
+	}
+	x := mrand.IntN(total)
+	for i, n := range edges {
+		if x -= spare(n); x < 0 {
+			return &edges[i]
+		}
+	}
+	return nil
+}
+
+func (s *Server) pickNode(ctx context.Context, nodes []cluster.NodeInfo, room string) (*cluster.NodeInfo, error) {
+	nodes = slices.DeleteFunc(nodes, func(n cluster.NodeInfo) bool { return n.Role == cluster.RoleEdge })
+	if len(nodes) == 0 {
+		return nil, nil
 	}
 	_, ps, err := s.cluster.Participants(ctx, room)
 	if err != nil {

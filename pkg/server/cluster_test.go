@@ -41,17 +41,31 @@ func freeUDPAddr(t *testing.T) string {
 
 func startNode(t *testing.T, mr *miniredis.Miniredis, id string) *node {
 	t.Helper()
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { rdb.Close() })
+	return startNodeWith(t, mr, id, nil)
+}
+
+// startNodeWith starts a node, letting configure adjust its config; with a
+// nil mr the node is standalone.
+func startNodeWith(t *testing.T, mr *miniredis.Miniredis, id string, configure func(*server.Config)) *node {
+	t.Helper()
 	cert, err := server.SelfSignedCert("localhost,127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	addr := freeUDPAddr(t)
-	srv, err := server.Start(context.Background(), server.Config{
+	cfg := server.Config{
 		UDPAddr: addr, Keys: keys, Certificate: cert, DepartureTimeout: time.Second,
-		Cluster: cluster.New(rdb, id, 3*time.Second, nil), AdvertiseAddr: addr, PublicURL: "https://" + addr + "/moq",
-	})
+		AdvertiseAddr: addr, PublicURL: "https://" + addr + "/moq", ViewerInterval: 200 * time.Millisecond,
+	}
+	if mr != nil {
+		rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+		t.Cleanup(func() { rdb.Close() })
+		cfg.Cluster = cluster.New(rdb, id, 3*time.Second, nil)
+	}
+	if configure != nil {
+		configure(&cfg)
+	}
+	srv, err := server.Start(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

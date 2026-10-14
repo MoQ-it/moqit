@@ -138,6 +138,78 @@ func Join(t testing.TB, addr, roomName, identity, token string) *Client {
 	return c
 }
 
+// Watch connects as a read-only viewer and follows the room track,
+// subscribing again whenever it ends, as the SDK does.
+func Watch(t testing.TB, addr, roomName, token string) *Client {
+	t.Helper()
+	c, err := Dial(t, addr, "", token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Room = roomName
+	go func() {
+		for c.Sess.Context().Err() == nil {
+			ctx, cancel := context.WithTimeout(c.Sess.Context(), 5*time.Second)
+			sub, err := c.Sess.Subscribe(ctx, v22.FullTrackName{Namespace: room.ServerNamespace(roomName), Name: room.TrackRoom},
+				&v22.Params{LocationFilter: &v22.LocationFilter{Type: v22.FilterRelativeStart, StartGroup: 1}})
+			cancel()
+			if err == nil {
+				readObjects(sub, func(b []byte) {
+					var u moqitv1.RoomStateUpdate
+					if proto.Unmarshal(b, &u) == nil {
+						c.apply(&u)
+					}
+				})
+			}
+			select {
+			case <-c.Sess.Context().Done():
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}()
+	return c
+}
+
+// Subscribe subscribes to a participant's track, retrying for up to 5s
+// while the node can't serve it yet.
+func (c *Client) Subscribe(identity, name string) *moqt.Subscription {
+	c.T.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		sub, err := c.TrySubscribe(identity, name)
+		if err == nil {
+			return sub
+		}
+		if time.Now().After(deadline) {
+			c.T.Fatalf("%s: subscribing to %s/%s: %v", c.Identity, identity, name, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// TrySubscribe subscribes to a participant's track once.
+func (c *Client) TrySubscribe(identity, name string) (*moqt.Subscription, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return c.Sess.Subscribe(ctx, v22.FullTrackName{Namespace: room.ParticipantNamespace(c.Room, identity), Name: name}, nil)
+}
+
+// NextObject returns the payload of the next object on sub.
+func NextObject(t testing.TB, sub *moqt.Subscription) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	g, err := sub.AcceptSubgroup(ctx)
+	if err != nil {
+		t.Fatalf("no subgroup: %v", err)
+	}
+	o, err := g.Next()
+	if err != nil {
+		t.Fatalf("no object: %v", err)
+	}
+	return string(o.Payload)
+}
+
 func readObjects(sub *moqt.Subscription, f func([]byte)) {
 	for {
 		g, err := sub.AcceptSubgroup(context.Background())
@@ -189,6 +261,32 @@ func (c *Client) Speakers() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.speakers...)
+}
+
+// NumViewers returns the room's viewer count as last seen.
+func (c *Client) NumViewers() uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.roomInfo.GetNumViewers()
+}
+
+// WaitRoom waits until the room info satisfies ok.
+func (c *Client) WaitRoom(what string, ok func(*moqitv1.Room) bool) {
+	c.T.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		c.mu.Lock()
+		done := c.roomInfo != nil && ok(c.roomInfo)
+		c.mu.Unlock()
+		if done {
+			return
+		}
+		select {
+		case <-c.changed:
+		case <-deadline:
+			c.T.Fatalf("%s: %s never true", c.Identity, what)
+		}
+	}
 }
 
 // RoomMetadata returns the room's metadata as last seen.

@@ -13,11 +13,13 @@ go run ./cmd/moqit token -room demo -identity bob -sources microphone
 - creates a self-signed 13-day certificate and logs its SHA-256, for WebTransport `serverCertificateHashes`;
 - enables `/v1/dev/token`.
 
-In production, pass `-keys key:secret` and `-cert`/`-key`. The certificate files are re-read when they change, so a renewed certificate (e.g. from an ACME client) needs no restart; until they exist the server waits for them. Run `moqit-server -h` for all flags.
+In production, pass `-keys key:secret` and `-cert`/`-key`. `-max-viewers` caps viewer sessions on a node, `-edge` makes it an edge node and `-tier` places an edge in a cascade (see [clustering.md](clustering.md#edge-nodes-and-viewers)). The certificate files are re-read when they change, so a renewed certificate (e.g. from an ACME client) needs no restart; until they exist the server waits for them. Run `moqit-server -h` for all flags.
 
 ## Access tokens
 
-Tokens are HS256 JWTs signed with an API secret: `iss` is the API key, `sub` the participant identity, and `grants.room` holds the permissions (`join`, `room`, `publish`, `subscribe`, `publishData`, `publishSources`, `updateOwnMetadata`, `hidden`, and `create` / `list` / `admin` for the server API). Mint them with `moqit token` or the Go SDK:
+Tokens are HS256 JWTs signed with an API secret: `iss` is the API key, `sub` the participant identity, and `grants.room` holds the permissions (`join`, `room`, `publish`, `subscribe`, `publishData`, `publishSources`, `updateOwnMetadata`, `hidden`, `viewer`, and `create` / `list` / `admin` for the server API).
+
+A `viewer` grant watches `room` read-only, without joining: see [clustering.md](clustering.md#edge-nodes-and-viewers). The identity is optional for viewers. Mint them with `moqit token` or the Go SDK:
 
 ```go
 import "github.com/MoQ-it/moqit/pkg/auth"
@@ -27,6 +29,10 @@ tok, err := auth.NewAccessToken(key, secret).SetIdentity("alice").SetName("Alice
 ```
 
 A second session with the same identity replaces the first.
+
+```sh
+go run ./cmd/moqit token -viewer -room standup     # a read-only viewer
+```
 
 ## RoomService
 
@@ -56,12 +62,13 @@ res, err := rooms.ListParticipants(ctx, connect.NewRequest(&moqitv1.ListParticip
 - `MuteTrack` flags the track and tells the publisher's SDK to stop sending (`localTrackMutedByServer` in the browser).
 - `SendData` delivers to participants' inboxes, from the server.
 - `DeleteRoom` disconnects everyone.
+- `Room.num_viewers` counts the room's viewers on every node. It is refreshed every few seconds; viewers are not participants.
 
 ## Webhooks
 
 `moqit-server -webhook https://app.example.com/hook`
 
-- **Events:** `room_started`, `room_finished`, `participant_joined`, `participant_left`, `track_published`, `track_unpublished`.
+- **Events:** `room_started`, `room_finished`, `participant_joined`, `participant_left`, `track_published`, `track_unpublished`. Viewers send none.
 - **Format:** a JSON `WebhookEvent` POST, delivered in order with retries.
 - **Signature:** the `Moqit-Signature` header is a JWT whose `sha256` claim is the body's hash; verify it with `moqit.ReceiveWebhook(r, keys)`.
 - **Once per event:** `room_started` and `room_finished` are sent once cluster-wide.

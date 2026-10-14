@@ -14,14 +14,12 @@ import (
 	"connectrpc.com/connect"
 	"github.com/MoQ-it/moqit/internal/testclient"
 	"github.com/MoQ-it/moqit/pkg/auth"
-	"github.com/MoQ-it/moqit/pkg/cluster"
 	"github.com/MoQ-it/moqit/pkg/server"
 	"github.com/MoQ-it/moqit/pkg/webhook"
 	moqitv1 "github.com/MoQ-it/moqit/proto/moqit/v1"
 	"github.com/MoQ-it/moqit/proto/moqit/v1/moqitv1connect"
 	moqit "github.com/MoQ-it/moqit/sdk/go"
 	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 )
 
 // hooks collects verified webhook events.
@@ -79,22 +77,12 @@ func (h *hooks) count(want string) int {
 
 func startAPINode(t *testing.T, mr *miniredis.Miniredis, id string, hookURL string) (*node, moqitv1connect.RoomServiceClient) {
 	t.Helper()
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { rdb.Close() })
-	cert, _ := server.SelfSignedCert("localhost,127.0.0.1")
-	addr := freeUDPAddr(t)
-	srv, err := server.Start(context.Background(), server.Config{
-		UDPAddr: addr, Keys: keys, Certificate: cert, DepartureTimeout: time.Second,
-		Cluster: cluster.New(rdb, id, 3*time.Second, nil), AdvertiseAddr: addr, PublicURL: "https://" + addr + "/moq",
-		Webhook: webhook.NewNotifier([]string{hookURL}, apiKey, apiSecret, nil),
+	n := startNodeWith(t, mr, id, func(c *server.Config) {
+		c.Webhook = webhook.NewNotifier([]string{hookURL}, apiKey, apiSecret, nil)
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { srv.Close() })
-	api := httptest.NewServer(srv.APIHandler())
+	api := httptest.NewServer(n.APIHandler())
 	t.Cleanup(api.Close)
-	return &node{Server: srv, addr: addr, id: id}, moqit.NewRoomServiceClient(api.URL, apiKey, apiSecret)
+	return n, moqit.NewRoomServiceClient(api.URL, apiKey, apiSecret)
 }
 
 func TestRoomServiceAcrossCluster(t *testing.T) {
@@ -126,9 +114,19 @@ func TestRoomServiceAcrossCluster(t *testing.T) {
 		t.Errorf("room metadata seen by alice: %q", alice.RoomMetadata())
 	}
 
+	// Viewers are counted but are not participants and send no webhooks.
+	testclient.Watch(t, b.addr, "r1", viewerToken(t, "carol", "r1"))
+	waitFor(t, "ListRooms counting the viewer", func() bool {
+		rooms, err := apiB.ListRooms(ctx, connect.NewRequest(&moqitv1.ListRoomsRequest{}))
+		return err == nil && len(rooms.Msg.Rooms) == 1 && rooms.Msg.Rooms[0].NumViewers == 1
+	})
+	alice.WaitRoom("viewer count in room state", func(r *moqitv1.Room) bool { return r.NumViewers == 1 })
 	ps, err := apiB.ListParticipants(ctx, connect.NewRequest(&moqitv1.ListParticipantsRequest{Room: "r1"}))
 	if err != nil || len(ps.Msg.Participants) != 2 {
 		t.Fatalf("ListParticipants: %v, %v", ps, err)
+	}
+	if h.count("participant_joined:carol") != 0 {
+		t.Error("participant_joined sent for a viewer")
 	}
 
 	alice.Send(testclient.MicTracks())

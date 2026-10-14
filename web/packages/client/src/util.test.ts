@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { CameraRenditions, codecForRenditions, Emitter, jwtClaims, participantNamespace, RateMeter, ScreenRenditions, Serial } from "./util.ts";
+import { CameraRenditions, codecForRenditions, Emitter, jwtClaims, participantNamespace, RateMeter, retryDelay, ScreenRenditions, Serial } from "./util.ts";
 
 test("emitter on/once/off/next", async () => {
   class E extends Emitter<{ ping: [number] }> {
@@ -72,4 +72,12 @@ test("rate meter counts the last window only", () => {
   expect(m.bitrate).toBe(50_000); // half the window is now empty
   now += 1000;
   expect(m.bitrate).toBe(0);
+});
+
+test("retry delays double, are capped and jittered", () => {
+  expect(retryDelay(0, () => 1)).toBe(500);
+  expect(retryDelay(0, () => 0)).toBe(250);
+  expect(retryDelay(3, () => 1)).toBe(4000);
+  expect(retryDelay(10, () => 1)).toBe(10000);
+  expect(retryDelay(10, () => 0)).toBe(5000);
 });

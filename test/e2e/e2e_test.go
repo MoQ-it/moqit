@@ -58,7 +58,8 @@ func TestChrome(t *testing.T)  { run(t, chrome(t), false) }
 func TestFirefox(t *testing.T) { run(t, firefox(t), false) }
 
 // The cluster variants put Alice and Bob on different nodes, so all media
-// and signalling crosses the node-to-node link.
+// and signalling crosses the node-to-node link, and the viewer Carol on an
+// edge node.
 func TestChromeCluster(t *testing.T)  { run(t, chrome(t), true) }
 func TestFirefoxCluster(t *testing.T) { run(t, firefox(t), true) }
 
@@ -101,14 +102,25 @@ func token(t *testing.T, identity string) string {
 	return tok
 }
 
-// node starts a moqit node, joined to a cluster when rdb is set.
-func node(t *testing.T, ctx context.Context, rdb *redis.Client, id string) *server.Server {
+func viewerToken(t *testing.T, identity string) string {
+	tok, err := auth.NewAccessToken(apiKey, apiSecret).SetIdentity(identity).
+		SetRoomGrant(&auth.RoomGrant{Viewer: true, Room: "e2e"}).ToJWT()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+// node starts a moqit node, joined to a cluster when rdb is set; an edge
+// node serves viewers only.
+func node(t *testing.T, ctx context.Context, rdb *redis.Client, id string, edge bool) *server.Server {
 	t.Helper()
 	cert, err := server.SelfSignedCert("localhost,127.0.0.1,::1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := server.Config{UDPAddr: "127.0.0.1:0", Keys: auth.KeyProvider{apiKey: apiSecret}, Certificate: cert}
+	cfg := server.Config{UDPAddr: "127.0.0.1:0", Keys: auth.KeyProvider{apiKey: apiSecret}, Certificate: cert,
+		ViewerInterval: 500 * time.Millisecond, Edge: edge}
 	if rdb != nil {
 		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 		if err != nil {
@@ -140,14 +152,14 @@ func run(t *testing.T, browser launcher, clustered bool) {
 		t.Fatalf("esbuild: %v\n%s", err, out)
 	}
 
-	var aliceNode, bobNode *server.Server
+	var aliceNode, bobNode, carolNode *server.Server
 	if clustered {
 		rdb := redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()})
 		defer rdb.Close()
-		aliceNode, bobNode = node(t, ctx, rdb, "A"), node(t, ctx, rdb, "B")
+		aliceNode, bobNode, carolNode = node(t, ctx, rdb, "A", false), node(t, ctx, rdb, "B", false), node(t, ctx, rdb, "E", true)
 	} else {
-		aliceNode = node(t, ctx, nil, "")
-		bobNode = aliceNode
+		aliceNode = node(t, ctx, nil, "", false)
+		bobNode, carolNode = aliceNode, aliceNode
 	}
 
 	results := make(chan result, 1)
@@ -165,8 +177,11 @@ func run(t *testing.T, browser launcher, clustered bool) {
 			"aliceCertHash": hex.EncodeToString(aliceNode.CertHash[:]),
 			"bobUrl":        "https://127.0.0.1:" + bobNode.Port() + "/moq",
 			"bobCertHash":   hex.EncodeToString(bobNode.CertHash[:]),
+			"carolUrl":      "https://127.0.0.1:" + carolNode.Port() + "/moq",
+			"carolCertHash": hex.EncodeToString(carolNode.CertHash[:]),
 			"aliceToken":    token(t, "alice"),
 			"bobToken":      token(t, "bob"),
+			"carolToken":    viewerToken(t, "carol"),
 		})
 	})
 	// The page asks for a server-side mute through the RoomService API.

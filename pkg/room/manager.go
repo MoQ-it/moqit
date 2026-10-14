@@ -53,6 +53,19 @@ type Config struct {
 	// EmptyTimeout closes a room created through the API that nobody
 	// joins (default 5m).
 	EmptyTimeout time.Duration
+
+	// Edge makes this node serve viewers only: it admits viewer tokens,
+	// never participants, and fetches every track from the nodes hosting
+	// it. It needs Cluster.
+	Edge bool
+	// Tier is an edge's level in a cascade: tier 1 fetches tracks from the
+	// nodes hosting them, higher tiers from an edge one tier up (default 1).
+	Tier int
+	// MaxViewers caps viewer sessions on this node; 0 = unlimited.
+	MaxViewers int
+	// ViewerInterval is how often viewer counts are shared and published
+	// (default 5s).
+	ViewerInterval time.Duration
 }
 
 // Notifier receives webhook events; *webhook.Notifier implements it.
@@ -110,6 +123,13 @@ type Manager struct {
 	mu         sync.Mutex
 	certSHA256 string // renewed certificate; overrides cfg.Node's
 	rooms      map[string]*Room
+
+	vmu         sync.Mutex
+	viewerTotal int            // viewer sessions, including those still being set up
+	viewerRooms map[string]int // attached viewers by room
+
+	missMu sync.Mutex
+	misses map[string]time.Time // failed upstream lookups by namespace
 }
 
 // New creates a Manager and the relay it authorizes. Serve every incoming
@@ -124,6 +144,12 @@ func New(cfg Config) *Manager {
 	if cfg.EmptyTimeout == 0 {
 		cfg.EmptyTimeout = 5 * time.Minute
 	}
+	if cfg.ViewerInterval == 0 {
+		cfg.ViewerInterval = 5 * time.Second
+	}
+	if cfg.Edge && cfg.Tier < 1 {
+		cfg.Tier = 1
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
@@ -133,7 +159,8 @@ func New(cfg Config) *Manager {
 	if cfg.NodeID == "" {
 		cfg.NodeID = newID("ND_")
 	}
-	m := &Manager{cfg: cfg, log: cfg.Logger, rooms: map[string]*Room{}, started: make(chan struct{}), peers: map[string]*peerSession{}}
+	m := &Manager{cfg: cfg, log: cfg.Logger, rooms: map[string]*Room{}, started: make(chan struct{}), peers: map[string]*peerSession{},
+		viewerRooms: map[string]int{}, misses: map[string]time.Time{}}
 	rc := relay.Config{Authorizer: m, NamespaceHook: m.onNamespace, ObjectHook: m.onObject, Logger: cfg.Logger}
 	if cfg.Cluster != nil {
 		rc.Upstream = m
@@ -177,6 +204,7 @@ func (m *Manager) Start(ctx context.Context, dial func(context.Context) (moqt.Co
 		}
 		go c.RunHeartbeat(ctx, m.nodeInfo)
 		go m.reapLoop(ctx)
+		go m.syncViewers(ctx)
 	}
 	close(m.started)
 	return nil
@@ -207,6 +235,10 @@ func (m *Manager) nodeInfo() cluster.NodeInfo {
 		r.mu.Unlock()
 	}
 	m.mu.Unlock()
+	if m.cfg.Edge {
+		info.Role, info.Tier = cluster.RoleEdge, m.cfg.Tier
+	}
+	info.Viewers, info.MaxViewers = m.Viewers(), m.cfg.MaxViewers
 	return info
 }
 
@@ -255,18 +287,33 @@ func (m *Manager) reapLoop(ctx context.Context) {
 }
 
 // ResolveUpstream implements relay.UpstreamResolver: a track of a
-// participant connected to another node is fetched from that node.
+// participant connected to another node is fetched from that node, and the
+// room track of a room this node doesn't host from a node that does. Edges
+// below tier 1 go through their parent edge.
 func (m *Manager) ResolveUpstream(ctx context.Context, track v22.FullTrackName) (*moqt.Session, error) {
 	kind, room, identity := parseNamespace(track.Namespace)
-	if kind != nsParticipant {
+	if kind != nsParticipant && (kind != nsRoomServer || track.Name != TrackRoom) {
 		return nil, nil
 	}
-	r := m.Room(room)
-	if r == nil {
+	if sess := m.fromParent(ctx, room); sess != nil {
+		return sess, nil
+	}
+	key := track.Namespace.Key()
+	if m.missedRecently(key) {
 		return nil, nil
 	}
-	node := r.nodeOf(identity)
+	var node string
+	var err error
+	if kind == nsParticipant {
+		node, err = m.participantNode(ctx, room, identity)
+	} else {
+		node, err = m.roomHost(ctx, room)
+	}
+	if err != nil {
+		return nil, err
+	}
 	if node == "" || node == m.cfg.NodeID {
+		m.miss(key)
 		return nil, nil
 	}
 	return m.peer(ctx, node)
@@ -350,6 +397,7 @@ func (m *Manager) waitStarted(ctx context.Context) error {
 type peerInfo struct {
 	server      bool
 	participant *Participant
+	viewer      *viewerInfo
 }
 
 func infoOf(p *relay.Peer) *peerInfo {
@@ -364,6 +412,7 @@ func infoOf(p *relay.Peer) *peerInfo {
 func (m *Manager) Serve(ctx context.Context, conn moqt.Conn, queryToken string) error {
 	peer := m.relay.NewPeer(nil)
 	var claims *auth.Claims
+	reserved := false
 	sess, err := moqt.NewSession(ctx, conn, moqt.Server, moqt.Config{
 		Handler: peer,
 		Logger:  m.log,
@@ -383,13 +432,25 @@ func (m *Manager) Serve(ctx context.Context, conn moqt.Conn, queryToken string) 
 			if err != nil {
 				return err
 			}
-			if !c.Grants.Server && (c.Grants.Room == nil || !c.Grants.Room.Join || c.Grants.Room.Room == "") {
+			switch {
+			case c.Grants.Server:
+			case c.IsViewer():
+				if !m.reserveViewer() {
+					return errors.New("node has no room for more viewers")
+				}
+				reserved = true
+			case m.cfg.Edge:
+				return errors.New("this node serves viewers only")
+			case c.Grants.Room == nil || !c.Grants.Room.Join || c.Grants.Room.Room == "":
 				return errors.New("token has no room join grant")
 			}
 			claims = c
 			return nil
 		},
 	})
+	if reserved {
+		defer m.releaseViewer()
+	}
 	if err != nil {
 		return err
 	}
@@ -398,6 +459,14 @@ func (m *Manager) Serve(ctx context.Context, conn moqt.Conn, queryToken string) 
 		peer.Attach(sess)
 		<-sess.Context().Done()
 		return nil
+	}
+	if claims.IsViewer() {
+		v := &viewerInfo{room: claims.Grants.Room.Room, identity: claims.Identity()}
+		if v.identity == "" {
+			v.identity = newID("viewer-")
+		}
+		peer.Info = &peerInfo{viewer: v}
+		return m.serveViewer(ctx, v, peer, sess)
 	}
 	p, err := m.join(ctx, claims, sess)
 	if err != nil {
@@ -551,14 +620,20 @@ func (m *Manager) AuthorizeSubscribeNamespace(peer *relay.Peer, prefix v22.Names
 func (m *Manager) AuthorizeSubscribe(peer *relay.Peer, track v22.FullTrackName, _ *v22.Params) error {
 	pi := infoOf(peer)
 	if pi.server {
-		return nil
+		return m.authorizeServerSubscribe(track)
 	}
-	p := pi.participant
-	if p == nil {
+	p, v := pi.participant, pi.viewer
+	var own string
+	switch {
+	case p != nil:
+		own = p.room.name
+	case v != nil:
+		own = v.room
+	default:
 		return denied("not a participant")
 	}
 	kind, room, identity := parseNamespace(track.Namespace)
-	if room != p.room.name {
+	if room != own {
 		return denied("outside your room")
 	}
 	switch kind {
@@ -567,7 +642,7 @@ func (m *Manager) AuthorizeSubscribe(peer *relay.Peer, track v22.FullTrackName, 
 			return nil
 		}
 	case nsInbox:
-		if track.Name == TrackInbox && identity == p.info.Identity {
+		if p != nil && track.Name == TrackInbox && identity == p.info.Identity {
 			return nil
 		}
 		return denied("not your inbox")
@@ -579,25 +654,58 @@ func (m *Manager) AuthorizeSubscribe(peer *relay.Peer, track v22.FullTrackName, 
 		case classUnknown:
 			return &moqt.RequestError{Code: v22.ReqErrDoesNotExist, Reason: "unknown track name"}
 		}
-		if !p.permission().CanSubscribe {
+		if p != nil && !p.permission().CanSubscribe {
 			return denied("no subscribe permission")
 		}
 		if class == classCatalog {
 			return nil
 		}
-		perm, ok := p.room.permissionOf(identity)
+		r := m.Room(room)
+		if r == nil {
+			// Only a viewer gets here, on a node not hosting the room: the
+			// node serving the track checks the publisher.
+			return nil
+		}
+		perm, ok := r.permissionOf(identity)
 		if !ok {
 			return &moqt.RequestError{Code: v22.ReqErrDoesNotExist, Reason: "no such participant"}
 		}
-		if class == classData && !perm.CanPublishData {
-			return denied("publisher may not publish data")
-		}
-		if class == classMedia && !auth.CanPublishSource(perm, source) {
-			return denied("publisher may not publish " + strings.ToLower(strings.TrimPrefix(source.String(), "TRACK_SOURCE_")))
-		}
-		return nil
+		return publisherAllows(perm, class, source)
 	}
 	return &moqt.RequestError{Code: v22.ReqErrDoesNotExist, Reason: "no such track"}
+}
+
+// authorizeServerSubscribe lets other nodes and our own session read any
+// track, except data and media a local publisher may not publish: an edge
+// can't check those itself.
+func (m *Manager) authorizeServerSubscribe(track v22.FullTrackName) error {
+	kind, room, identity := parseNamespace(track.Namespace)
+	if kind != nsParticipant {
+		return nil
+	}
+	class, source := classifyTrack(track.Name)
+	if class != classData && class != classMedia {
+		return nil
+	}
+	r := m.Room(room)
+	if r == nil {
+		return nil
+	}
+	p := r.participant(identity)
+	if p == nil {
+		return nil
+	}
+	return publisherAllows(p.permission(), class, source)
+}
+
+func publisherAllows(perm *moqitv1.ParticipantPermission, class trackClass, source moqitv1.TrackSource) error {
+	if class == classData && !perm.CanPublishData {
+		return denied("publisher may not publish data")
+	}
+	if class == classMedia && !auth.CanPublishSource(perm, source) {
+		return denied("publisher may not publish " + strings.ToLower(strings.TrimPrefix(source.String(), "TRACK_SOURCE_")))
+	}
+	return nil
 }
 
 func newID(prefix string) string {

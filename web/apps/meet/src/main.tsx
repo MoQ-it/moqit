@@ -2,9 +2,10 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Home } from "./Home.tsx";
 import { Meeting } from "./Meeting.tsx";
+import { Watch } from "./Watch.tsx";
 import "./styles.css";
 
-/** Minimal router: "/" and "/r/<room>". */
+/** Minimal router: "/", "/r/<room>" and "/watch/<room>". */
 export function navigate(path: string) {
   history.pushState(null, "", path);
   dispatchEvent(new PopStateEvent("popstate"));
@@ -18,7 +19,9 @@ function App() {
     return () => removeEventListener("popstate", on);
   }, []);
   const m = path.match(/^\/r\/([a-z0-9-]{1,64})\/?$/);
-  return m ? <Meeting key={m[1]} room={m[1]} /> : <Home />;
+  if (m) return <Meeting key={m[1]} room={m[1]} />;
+  const w = path.match(/^\/watch\/([a-z0-9-]{1,64})\/?$/);
+  return w ? <Watch key={w[1]} room={w[1]} /> : <Home />;
 }
 
 createRoot(document.getElementById("root")!).render(

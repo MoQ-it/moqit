@@ -191,6 +191,21 @@ async function scenario(browser) {
   await waitFor(() => videoPlaying(bob, "alice-"), "Bob to see Alice's video");
   await waitFor(() => videoPlaying(alice, "bob-"), "Alice to see Bob's video");
   log("video flowing both ways");
+
+  // A viewer watches through the watch link: it sees and hears the meeting
+  // but is not a participant, and the participants see one viewer.
+  const viewerCtx = await browser.newContext({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: insecure });
+  const viewer = await viewerCtx.newPage();
+  viewer.on("pageerror", (e) => console.error("[viewer] page error:", e.message));
+  await viewer.goto(url.replace("/r/", "/watch/"));
+  await waitFor(() => videoPlaying(viewer, "alice-"), "the viewer to see Alice's video");
+  await waitFor(async () => (await count(viewer)) === 2, "the viewer to see two participants");
+  await waitFor(async () => (await alice.locator(".viewers").getAttribute("data-viewers", { timeout: 500 }).catch(() => null)) === "1", "Alice to see one viewer");
+  if ((await count(alice)) !== 2 || (await count(bob)) !== 2) throw new Error("the viewer was counted as a participant");
+  await viewer.screenshot({ path: join(shots, "viewer.png") });
+  await viewerCtx.close();
+  await waitFor(async () => (await alice.locator(".viewers").count()) === 0, "the viewer count to clear");
+  log("viewer watched read-only and was counted as a viewer");
   await waitFor(async () => /\d+ (k|M)?bps/.test((await bob.locator(".moqit-meeting-stats").textContent({ timeout: 1000 }).catch(() => "")) ?? "")
     && (await tile(bob, "alice-").locator(".moqit-stats").textContent({ timeout: 1000 }).catch(() => "")).includes("bps"), "Bob to see bitrates despite an old saved setting");
   log(`stats shown: header "${await bob.locator(".moqit-meeting-stats").textContent()}", Alice's tile "${await tile(bob, "alice-").locator(".moqit-stats").textContent()}"`);

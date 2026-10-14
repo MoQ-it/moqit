@@ -15,6 +15,7 @@ message Room {
   uint32 max_participants = 6; // 0 = unlimited
   uint32 num_participants = 7;
   int64 created_at = 8; // unix ms
+  uint32 num_viewers = 9; // read-only viewers on every node, refreshed every few seconds
 }
 
 enum TrackKind {

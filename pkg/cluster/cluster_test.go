@@ -129,3 +129,44 @@ func TestDirectAndReap(t *testing.T) {
 		t.Errorf("after reap %v", ps)
 	}
 }
+
+func TestViewers(t *testing.T) {
+	_, a, b := pair(t)
+	ctx := context.Background()
+	now := time.Now()
+	a.now = func() time.Time { return now }
+	b.now = a.now
+	a.SetViewers(ctx, "r1", 3)
+	b.SetViewers(ctx, "r1", 4)
+	if n, err := a.Viewers(ctx, "r1"); err != nil || n != 7 {
+		t.Fatalf("viewers %d, %v; want 7", n, err)
+	}
+	b.SetViewers(ctx, "r1", 0)
+	if n, _ := a.Viewers(ctx, "r1"); n != 3 {
+		t.Errorf("after B's viewers left: %d; want 3", n)
+	}
+	// A node that stops refreshing its count (it died) no longer counts.
+	b.SetViewers(ctx, "r1", 5)
+	now = now.Add(a.viewersStale() + time.Second)
+	a.SetViewers(ctx, "r1", 3)
+	if n, _ := a.Viewers(ctx, "r1"); n != 3 {
+		t.Errorf("with B's count stale: %d; want 3", n)
+	}
+
+	a.EnsureRoom(ctx, &moqitv1.Room{Name: "r1"})
+	if r, err := a.Room(ctx, "r1"); err != nil || r.NumViewers != 3 {
+		t.Errorf("room record %v, %v; want 3 viewers", r, err)
+	}
+}
+
+func TestParticipantNode(t *testing.T) {
+	_, a, b := pair(t)
+	ctx := context.Background()
+	a.PutParticipant(ctx, "r1", &moqitv1.ParticipantInfo{Identity: "alice", Sid: "PA_1", NodeId: "A"})
+	if p, err := b.ParticipantNode(ctx, "r1", "alice"); err != nil || p.GetNodeId() != "A" {
+		t.Errorf("alice: %v, %v", p, err)
+	}
+	if p, err := b.ParticipantNode(ctx, "r1", "nobody"); err != nil || p != nil {
+		t.Errorf("unknown participant: %v, %v", p, err)
+	}
+}

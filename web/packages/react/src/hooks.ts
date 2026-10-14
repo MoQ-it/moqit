@@ -25,7 +25,7 @@ const roomEvents: (keyof RoomEvents)[] = [
   "participantMetadataChanged", "participantNameChanged", "participantAttributesChanged", "trackPublished",
   "trackUnpublished", "trackSubscribed", "trackUnsubscribed", "trackMuted", "trackUnmuted",
   "localTrackPublished", "localTrackUnpublished", "localTrackMutedByServer", "roomMetadataChanged", "activeSpeakersChanged",
-  "activeDeviceChanged",
+  "activeDeviceChanged", "viewerCountChanged",
 ];
 
 /** Re-renders whenever the room's state changes; read the Room directly. */
@@ -52,15 +52,24 @@ export function useParticipants(): Participant[] {
   const v = useRoomUpdates(room);
   return useMemo(() => {
     if (room.state !== ConnectionState.Connected) return [];
+    if (room.isViewer) return [...room.remoteParticipants.values()];
     return [room.localParticipant, ...room.remoteParticipants.values()];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room, v]);
 }
 
+/** The local participant; undefined for a viewer, which has none. */
 export function useLocalParticipant(): LocalParticipant | undefined {
   const room = useRoom();
   useRoomUpdates(room);
-  return room.state === ConnectionState.Connected ? room.localParticipant : undefined;
+  return room.state === ConnectionState.Connected && !room.isViewer ? room.localParticipant : undefined;
+}
+
+/** The number of read-only viewers of the room. */
+export function useViewerCount(): number {
+  const room = useRoom();
+  useRoomUpdates(room);
+  return room.numViewers;
 }
 
 /** The video track of a participant for a source, local or remote. */

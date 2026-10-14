@@ -24,6 +24,26 @@ await room.localParticipant.publishData(new TextEncoder().encode("hi"), { topic:
 
 Events follow LiveKit's: `participantConnected`, `trackPublished`, `trackSubscribed`, `trackMuted`, `activeSpeakersChanged`, `dataReceived`, `connectionStateChanged` and more (see `RoomEvents` in `room.ts`).
 
+## Watching as a viewer
+
+With a viewer token (see [clustering.md](clustering.md#edge-nodes-and-viewers)), `connect` watches the room read-only:
+- It announces nothing, so participants never see the viewer.
+- It waits up to `timeoutMs` for the room to start.
+- Remote participants and their tracks work as usual.
+
+```ts
+const room = new Room();
+room.on("trackSubscribed", (track, pub) => pub.source === TrackSource.CAMERA && document.body.append(track.attach()));
+room.on("viewerCountChanged", (n) => console.log(`${n} watching`));
+await room.connect(url, viewerToken);        // the URL from /v1/route: usually an edge
+room.isViewer;                               // true
+await room.localParticipant.setMicrophoneEnabled(true); // rejects: "viewers cannot publish"
+```
+
+Viewers receive participants' broadcast data but not targeted data.
+
+**Resubscribing:** for viewers and participants alike, the room track and subscribed remote tracks are subscribed again, with jittered backoff (0.5 s doubling to 10 s), when they end or can't be had yet. This covers a node closing the room, a publisher reconnecting to another node, and a track a node can't serve yet. `room.numViewers` and `viewerCountChanged` report the room's viewers for everyone.
+
 ## Devices
 
 ```ts
@@ -87,4 +107,6 @@ import { ConferenceLayout, ControlBar, RoomProvider, StartAudio } from "@moqit/r
 </RoomProvider>
 ```
 
-Hooks include `useParticipants`, `useLocalParticipant`, `useVideoTrack`, `useIsSpeaking`, `useActiveSpeakers`, `useChat`, `useScreenShares`, `useMediaDevices` and `useActiveDevice`; components include `ParticipantTile`, `GridLayout`, `FocusLayout`, `DeviceSelect`, `Chat` and `MeetingStats`.
+For a viewer, `useParticipants` lists only the remote participants and `useLocalParticipant` returns `undefined`; `useViewerCount` gives the number of viewers.
+
+Hooks include `useParticipants`, `useLocalParticipant`, `useViewerCount`, `useVideoTrack`, `useIsSpeaking`, `useActiveSpeakers`, `useChat`, `useScreenShares`, `useMediaDevices` and `useActiveDevice`; components include `ParticipantTile`, `GridLayout`, `FocusLayout`, `DeviceSelect`, `Chat` and `MeetingStats`.

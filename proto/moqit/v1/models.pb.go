@@ -304,7 +304,8 @@ type Room struct {
 	DepartureTimeout uint32                 `protobuf:"varint,5,opt,name=departure_timeout,json=departureTimeout,proto3" json:"departure_timeout,omitempty"` // seconds a room lives on after the last participant leaves
 	MaxParticipants  uint32                 `protobuf:"varint,6,opt,name=max_participants,json=maxParticipants,proto3" json:"max_participants,omitempty"`    // 0 = unlimited
 	NumParticipants  uint32                 `protobuf:"varint,7,opt,name=num_participants,json=numParticipants,proto3" json:"num_participants,omitempty"`
-	CreatedAt        int64                  `protobuf:"varint,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"` // unix ms
+	CreatedAt        int64                  `protobuf:"varint,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`    // unix ms
+	NumViewers       uint32                 `protobuf:"varint,9,opt,name=num_viewers,json=numViewers,proto3" json:"num_viewers,omitempty"` // read-only viewers on every node, refreshed every few seconds
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -391,6 +392,13 @@ func (x *Room) GetNumParticipants() uint32 {
 func (x *Room) GetCreatedAt() int64 {
 	if x != nil {
 		return x.CreatedAt
+	}
+	return 0
+}
+
+func (x *Room) GetNumViewers() uint32 {
+	if x != nil {
+		return x.NumViewers
 	}
 	return 0
 }
@@ -821,7 +829,7 @@ var File_moqit_v1_models_proto protoreflect.FileDescriptor
 
 const file_moqit_v1_models_proto_rawDesc = "" +
 	"\n" +
-	"\x15moqit/v1/models.proto\x12\bmoqit.v1\"\x8f\x02\n" +
+	"\x15moqit/v1/models.proto\x12\bmoqit.v1\"\xb0\x02\n" +
 	"\x04Room\x12\x10\n" +
 	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
@@ -831,7 +839,9 @@ const file_moqit_v1_models_proto_rawDesc = "" +
 	"\x10max_participants\x18\x06 \x01(\rR\x0fmaxParticipants\x12)\n" +
 	"\x10num_participants\x18\a \x01(\rR\x0fnumParticipants\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\b \x01(\x03R\tcreatedAt\"\x90\x01\n" +
+	"created_at\x18\b \x01(\x03R\tcreatedAt\x12\x1f\n" +
+	"\vnum_viewers\x18\t \x01(\rR\n" +
+	"numViewers\"\x90\x01\n" +
 	"\tRendition\x12\x1d\n" +
 	"\n" +
 	"track_name\x18\x01 \x01(\tR\ttrackName\x12\x14\n" +

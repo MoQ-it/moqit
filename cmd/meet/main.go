@@ -80,13 +80,20 @@ func run(log *slog.Logger, addr, static string, dev bool, udp, nodeURL, apiKey, 
 	mux.HandleFunc("POST /api/token", func(w http.ResponseWriter, r *http.Request) {
 		// Rejoin is the random part of the identity this tab had before a
 		// reload: reusing it makes the server replace the old session at
-		// once instead of showing both until the old one times out.
-		var req struct{ Room, Name, Rejoin string }
+		// once instead of showing both until the old one times out. Viewer
+		// asks for a read-only viewer token, which needs no name.
+		var req struct {
+			Room, Name, Rejoin string
+			Viewer             bool
+		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 		req.Name = strings.TrimSpace(req.Name)
+		if req.Viewer && req.Name == "" {
+			req.Name = "viewer"
+		}
 		if !roomCode.MatchString(req.Room) || req.Name == "" || utf8.RuneCountInString(req.Name) > 64 {
 			http.Error(w, "invalid room or name", http.StatusBadRequest)
 			return
@@ -98,8 +105,9 @@ func run(log *slog.Logger, addr, static string, dev bool, udp, nodeURL, apiKey, 
 			suffix = req.Rejoin
 		}
 		identity := slug(req.Name) + "-" + suffix
+		grant := &auth.RoomGrant{Join: !req.Viewer, Viewer: req.Viewer, Room: req.Room}
 		tok, err := auth.NewAccessToken(apiKey, apiSecret).SetIdentity(identity).SetName(req.Name).
-			SetRoomGrant(&auth.RoomGrant{Join: true, Room: req.Room}).SetValidFor(6 * time.Hour).ToJWT()
+			SetRoomGrant(grant).SetValidFor(6 * time.Hour).ToJWT()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

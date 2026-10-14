@@ -54,6 +54,10 @@ docker compose up -d --build
 
 Restarting the node ends meetings in progress; participants rejoin by reloading the page.
 
+## Large audiences
+
+This setup runs one node. Viewers of `https://<domain>/watch/<code>` count against the same node's capacity. For large audiences, run a cluster with edge nodes for viewers: see [clustering.md](clustering.md#edge-nodes-and-viewers).
+
 ## Security notes
 
 - **Anyone who can open the site can create and join meetings**: Meet's token endpoint has no login. Put your own authentication in front of it, or mint tokens from your own backend instead (see [server.md](server.md)).

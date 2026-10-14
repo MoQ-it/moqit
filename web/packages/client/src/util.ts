@@ -185,11 +185,22 @@ export async function pickVideoCodec(): Promise<string> {
 }
 
 /** Decodes the payload of a JWT without verifying it. */
-export function jwtClaims(token: string): { sub?: string; grants?: { room?: { room?: string } } } {
+export function jwtClaims(token: string): { sub?: string; grants?: { room?: { room?: string; viewer?: boolean } } } {
   const part = token.split(".")[1] ?? "";
   const b64 = part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "=");
   return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
 }
+
+/**
+ * Delay before retry number attempt (from 0): doubling from 0.5s to 10s,
+ * jittered down by up to half so that many clients don't retry together.
+ */
+export function retryDelay(attempt: number, random: () => number = Math.random): number {
+  const base = Math.min(10000, 500 * 2 ** attempt);
+  return base / 2 + (random() * base) / 2;
+}
+
+export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** Runs async tasks one at a time, in order. */
 export class Serial {

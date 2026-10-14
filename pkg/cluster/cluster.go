@@ -30,7 +30,20 @@ type NodeInfo struct {
 	Region       string `json:"region,omitempty"`
 	Participants int    `json:"participants"`
 	UpdatedAt    int64  `json:"updatedAt"`
+	// Role is RoleEdge for nodes that serve viewers only; empty otherwise.
+	Role string `json:"role,omitempty"`
+	// Tier is an edge's level in a cascade: tier 1 edges fetch from the
+	// nodes hosting tracks, tier n from tier n-1 edges.
+	Tier int `json:"tier,omitempty"`
+	// Viewers is the number of viewer sessions; MaxViewers caps it (0 =
+	// unlimited).
+	Viewers    int `json:"viewers,omitempty"`
+	MaxViewers int `json:"maxViewers,omitempty"`
 }
+
+// RoleEdge marks a node that serves read-only viewers and hosts no
+// participants.
+const RoleEdge = "edge"
 
 // Cluster is one node's handle on the shared state.
 type Cluster struct {
@@ -38,6 +51,7 @@ type Cluster struct {
 	nodeID string
 	ttl    time.Duration
 	log    *slog.Logger
+	now    func() time.Time
 }
 
 // New returns a Cluster for nodeID. Node registrations expire after ttl
@@ -49,7 +63,7 @@ func New(rdb redis.UniversalClient, nodeID string, ttl time.Duration, log *slog.
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Cluster{rdb: rdb, nodeID: nodeID, ttl: ttl, log: log}
+	return &Cluster{rdb: rdb, nodeID: nodeID, ttl: ttl, log: log, now: time.Now}
 }
 
 func (c *Cluster) NodeID() string { return c.nodeID }
@@ -199,6 +213,9 @@ func (c *Cluster) Room(ctx context.Context, name string) (*moqitv1.Room, error) 
 	}
 	n, _ := c.rdb.HLen(ctx, keyMembers(name)).Result()
 	r.NumParticipants = uint32(n)
+	if v, err := c.Viewers(ctx, name); err == nil {
+		r.NumViewers = uint32(v)
+	}
 	return &r, nil
 }
 

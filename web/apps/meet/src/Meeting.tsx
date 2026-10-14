@@ -1,5 +1,5 @@
 import { ConnectionState, Room, TrackSource } from "@moqit/client";
-import { Chat, ConferenceLayout, ControlBar, DeviceSelect, MeetingStats, RoomProvider, StartAudio, useChat, useParticipants, useScreenShares, VideoStatsContext } from "@moqit/react";
+import { Chat, ConferenceLayout, ControlBar, DeviceSelect, MeetingStats, RoomProvider, StartAudio, useChat, useParticipants, useScreenShares, useViewerCount, VideoStatsContext } from "@moqit/react";
 import { useEffect, useRef, useState } from "react";
 import { navigate } from "./main.tsx";
 import { CameraEffects, hasVideoEffects, NoiseRemoval } from "./effects.ts";
@@ -31,7 +31,7 @@ function saveDevice(kind: MediaDeviceKind, id: string) {
   localStorage.setItem(DEVICES_KEY, JSON.stringify({ ...savedDevices(), [kind]: id }));
 }
 
-interface ConnectionDetails {
+export interface ConnectionDetails {
   url: string;
   token: string;
   certHash?: string; // development servers with a self-signed certificate
@@ -59,7 +59,7 @@ async function fetchConnectionDetails(room: string, name: string): Promise<Conne
   return res.json();
 }
 
-function hexBytes(hex: string): Uint8Array {
+export function hexBytes(hex: string): Uint8Array {
   return Uint8Array.from(hex.match(/../g) ?? [], (h) => parseInt(h, 16));
 }
 
@@ -308,7 +308,11 @@ function MeetingView({ roomName, state, error, chatOpen, setChatOpen, leave, ini
           <button className="link" onClick={() => void navigator.clipboard?.writeText(location.origin + location.pathname)}>
             Copy link
           </button>
+          <button className="link" onClick={() => void navigator.clipboard?.writeText(`${location.origin}/watch/${roomName}`)}>
+            Copy watch link
+          </button>
           <ParticipantCount />
+          <ViewerCount />
           <Presenting />
           {quality.showStats && <MeetingStats />}
           {state !== ConnectionState.Connected && <span className="status">{state}…</span>}
@@ -346,7 +350,14 @@ function Presenting() {
   );
 }
 
-function ParticipantCount() {
+/** Read-only viewers, when there are any. */
+export function ViewerCount() {
+  const n = useViewerCount();
+  if (n === 0) return null;
+  return <span className="viewers" data-viewers={n}>{n} watching</span>;
+}
+
+export function ParticipantCount() {
   const n = useParticipants().length;
   return <span className="count" data-count={n}>{n} {n === 1 ? "participant" : "participants"}</span>;
 }

@@ -1,4 +1,5 @@
-# A two-node development cluster with Redis and the Meet app.
+# A development cluster with Redis, two nodes, two edge nodes for viewers
+# and the Meet app (watch a meeting read-only at /watch/<code>).
 #   docker build -f deploy/Dockerfile -t moqit .   (from moqit/)
 #   docker compose -f deploy/docker-compose.yml up
 # Then open http://localhost:8080. Nodes use self-signed certificates
@@ -25,10 +26,22 @@ services:
               "-advertise", "node2:4444", "-public-url", "https://localhost:4444/moq"]
     ports: ["4444:4444/udp", "7881:7880"]
 
+  edge1:
+    <<: *node
+    command: ["-dev", "-edge", "-max-viewers", "1000", "-udp", ":4445", "-http", ":7880", "-node-id", "edge1",
+              "-advertise", "edge1:4445", "-public-url", "https://localhost:4445/moq"]
+    ports: ["4445:4445/udp"]
+
+  edge2:
+    <<: *node
+    command: ["-dev", "-edge", "-max-viewers", "1000", "-udp", ":4446", "-http", ":7880", "-node-id", "edge2",
+              "-advertise", "edge2:4446", "-public-url", "https://localhost:4446/moq"]
+    ports: ["4446:4446/udp"]
+
   meet:
     image: moqit
     entrypoint: ["/usr/local/bin/meet"]
     command: ["-addr", ":8080", "-static", "/srv/meet", "-route-url", "http://node1:7880/v1/route",
               "-key", "devkey", "-secret", "secret-for-development-only-0123456789"]
-    depends_on: [node1, node2]
+    depends_on: [node1, node2, edge1, edge2]
     ports: ["8080:8080"]

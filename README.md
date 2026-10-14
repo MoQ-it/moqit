@@ -28,6 +28,7 @@ It comes with a browser SDK, React components, a server API with webhooks, a Go 
 - **Track processors** for effects such as background blur and noise removal
 - **Server API** (Connect: JSON, protobuf or gRPC) and signed **webhooks**
 - **Clustering** — a room can span nodes; Redis for state, MoQ between nodes
+- **Edge nodes** — read-only viewers served from edges for large audiences, with a load generator
 - **Meet** — a complete conferencing app with chat, presenting, effects, devices and stats
 
 ## Quick start

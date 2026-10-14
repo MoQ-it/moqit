@@ -38,3 +38,16 @@ test("connect names the step that timed out", async () => {
   expect(room.state).toBe(ConnectionState.Disconnected);
   expect(SilentServer.closes).toBe(1);
 });
+
+test("a viewer connects without announcing itself, and cannot publish", async () => {
+  vi.stubGlobal("WebTransport", SilentServer);
+  const room = new Room({ disconnectOnPageLeave: false });
+  const t = token({ grants: { room: { room: "r1", viewer: true } } });
+  // It waits for the room state rather than announcing a participant.
+  await expect(room.connect("https://node.test/moq", t, { timeoutMs: 50 })).rejects.toThrow("timed out waiting for the room state");
+  expect(room.isViewer).toBe(true);
+  expect(room.name).toBe("r1");
+  await expect(room.localParticipant.setMicrophoneEnabled(true)).rejects.toThrow("viewers cannot publish");
+  await expect(room.localParticipant.publishData(new Uint8Array([1]))).rejects.toThrow("viewers cannot publish");
+  await expect(room.localParticipant.setMetadata("x")).rejects.toThrow("viewers cannot publish");
+});

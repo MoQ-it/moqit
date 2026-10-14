@@ -27,6 +27,10 @@ Every MoQ request is checked by `pkg/room`, which implements the relay's `Author
 - A participant may publish only its own namespace.
 - `signal` tracks are readable only by the server; an `inbox` only by its owner.
 - Nothing outside the participant's room is reachable.
-- A media track is served only if its publisher's grant allows that source (camera, microphone, screen, screen-audio).
+- A media track is served only if its publisher's grant allows that source (camera, microphone, screen, screen-audio). The publisher's node checks this for other nodes too, since an edge does not know the grant.
 - The same checks apply to `SetTracks` declarations.
 - A second session with the same identity replaces the first.
+
+## Viewers
+
+A session with a `viewer` token skips joining: it publishes nothing and has no inbox or signal track. It subscribes to `room`, with relative start 1, and to the participants' tracks it wants. Each `room` subscription starts with a snapshot. A resubscription may be served by another node, whose versions differ, so versions are compared only within one subscription.

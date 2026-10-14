@@ -1,5 +1,6 @@
-// Browser side of e2e_test.go: two participants in one page, each with its
-// own Room (and WebTransport session), exercising the SDK end to end.
+// Browser side of e2e_test.go: two participants and a viewer in one page,
+// each with its own Room (and WebTransport session), exercising the SDK end
+// to end.
 import { type RemoteAudioTrack, type RemoteVideoTrack, Room, TrackSource } from "../../web/packages/client/src/index.ts";
 
 const enc = new TextEncoder();
@@ -62,6 +63,26 @@ async function main() {
     step(`A/V sync ${result.avSync}`);
     const mic = alice.localParticipant.tracks.get("microphone") as { encodeDelayMs?: number; sendDelayMs?: number } | undefined;
     result.latency = `video ${Math.round(video!.latencyMs)}ms, audio ${Math.round(audio!.latencyMs)}ms (capture to arrival, same machine); audio encode ${Math.round(mic?.encodeDelayMs ?? -1)}ms, send ${Math.round(mic?.sendDelayMs ?? -1)}ms`;
+
+    // Carol watches read-only: she gets the media but is no participant.
+    const carol = new Room();
+    let carolVideo: RemoteVideoTrack | undefined;
+    let carolAudio: RemoteAudioTrack | undefined;
+    carol.on("trackSubscribed", (t, pub) => {
+      if (pub.source === TrackSource.CAMERA) carolVideo = t as RemoteVideoTrack;
+      if (pub.source === TrackSource.MICROPHONE) carolAudio = t as RemoteAudioTrack;
+    });
+    await carol.connect(cfg.carolUrl, cfg.carolToken, hashOf(cfg.carolCertHash));
+    step(`carol watching through ${cfg.carolUrl}`);
+    await until("carol decodes 30 video frames", () => (carolVideo?.framesDecoded ?? 0) >= 30);
+    await until("carol decodes 50 audio frames", () => (carolAudio?.framesDecoded ?? 0) >= 50);
+    await until("alice and bob count one viewer", () => alice.numViewers === 1 && bob.numViewers === 1);
+    if (alice.remoteParticipants.has("carol") || bob.remoteParticipants.has("carol")) throw new Error("the viewer appears as a participant");
+    if (!carol.isViewer || carol.remoteParticipants.size !== 2) throw new Error(`carol sees ${[...carol.remoteParticipants.keys()]}`);
+    const refused = await carol.localParticipant.setMicrophoneEnabled(true).then(() => false, () => true);
+    if (!refused) throw new Error("a viewer published its microphone");
+    await carol.disconnect();
+    await until("viewer count drops", () => alice.numViewers === 0);
 
     // Simulcast: switch to the low rendition.
     const pub = bob.remoteParticipants.get("alice")!.getTrackPublication(TrackSource.CAMERA)!;

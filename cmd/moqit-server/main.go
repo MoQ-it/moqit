@@ -48,10 +48,14 @@ func main() {
 	advertise := flag.String("advertise", os.Getenv("MOQIT_ADVERTISE"), "host:port other nodes use to reach this node's UDP port")
 	publicURL := flag.String("public-url", os.Getenv("MOQIT_PUBLIC_URL"), "WebTransport URL clients are routed to, e.g. https://node1.example.com:4443/moq")
 	region := flag.String("region", os.Getenv("MOQIT_REGION"), "region label for routing")
+	edge := flag.Bool("edge", os.Getenv("MOQIT_EDGE") == "true", "edge node: serve read-only viewers only, fetching tracks from the cluster (needs -redis; env MOQIT_EDGE=true)")
+	maxViewers := flag.Int("max-viewers", 0, "maximum viewer sessions on this node; 0 = unlimited")
+	tier := flag.Int("tier", 0, "edge tier in a cascade: 1 (default) fetches from the nodes hosting tracks, 2 and up from an edge one tier up in the same -region")
 	webhooks := flag.String("webhook", os.Getenv("MOQIT_WEBHOOK"), "comma-separated URLs receiving webhook events, signed with the first API key (env MOQIT_WEBHOOK)")
 	flag.Parse()
 	webhookURLs = *webhooks
 	clusterCfg = clusterFlags{*redisURL, *nodeID, *advertise, *publicURL, *region}
+	edgeNode, viewerCap, edgeTier = *edge, *maxViewers, *tier
 
 	level := slog.LevelInfo
 	if *verbose {
@@ -97,7 +101,11 @@ func run(log *slog.Logger, dev bool, udpAddr, httpAddr, keysFlag, certFile, keyF
 	}
 
 	cfg := server.Config{UDPAddr: udpAddr, Keys: keys, Certificate: cert, CertFile: certFile, KeyFile: keyFile, DepartureTimeout: departure, Logger: log,
-		AdvertiseAddr: clusterCfg.advertise, PublicURL: clusterCfg.publicURL, Region: clusterCfg.region, ExposeCertHash: dev}
+		AdvertiseAddr: clusterCfg.advertise, PublicURL: clusterCfg.publicURL, Region: clusterCfg.region, ExposeCertHash: dev,
+		Edge: edgeNode, Tier: edgeTier, MaxViewers: viewerCap}
+	if edgeNode && clusterCfg.redis == "" {
+		return errors.New("-edge needs -redis")
+	}
 	if clusterCfg.redis != "" {
 		opts, err := redis.ParseURL(clusterCfg.redis)
 		if err != nil {
@@ -116,7 +124,7 @@ func run(log *slog.Logger, dev bool, udpAddr, httpAddr, keysFlag, certFile, keyF
 			return fmt.Errorf("redis: %w", err)
 		}
 		cfg.Cluster = cluster.New(rdb, id, 10*time.Second, log)
-		log.Info("joining cluster", "node", id, "advertise", cfg.AdvertiseAddr, "publicUrl", cfg.PublicURL)
+		log.Info("joining cluster", "node", id, "advertise", cfg.AdvertiseAddr, "publicUrl", cfg.PublicURL, "edge", edgeNode)
 	}
 	if webhookURLs != "" {
 		key := firstKey(keysFlag, dev)
@@ -181,6 +189,12 @@ func firstKey(keysFlag string, dev bool) string {
 }
 
 var clusterCfg clusterFlags
+
+var (
+	edgeNode  bool
+	viewerCap int
+	edgeTier  int
+)
 
 func randomHex(n int) string {
 	b := make([]byte, n)

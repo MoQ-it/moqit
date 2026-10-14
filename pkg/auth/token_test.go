@@ -61,3 +61,24 @@ func TestRejects(t *testing.T) {
 		t.Error("unknown source must fail")
 	}
 }
+
+func TestViewer(t *testing.T) {
+	tok, err := NewAccessToken("devkey", keys["devkey"]).SetRoomGrant(&RoomGrant{Viewer: true, Room: "live"}).ToJWT()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := keys.Verify(tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.IsViewer() || c.Grants.Room.Room != "live" || c.Identity() != "" {
+		t.Fatalf("claims %+v", c)
+	}
+	if _, err := NewAccessToken("devkey", "s").SetRoomGrant(&RoomGrant{Viewer: true}).ToJWT(); err == nil {
+		t.Error("viewer grant without a room must fail")
+	}
+	join := &Claims{Grants: Grants{Room: &RoomGrant{Join: true, Room: "r"}}}
+	if join.IsViewer() {
+		t.Error("a join grant is not a viewer grant")
+	}
+}

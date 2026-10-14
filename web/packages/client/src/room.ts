@@ -29,9 +29,11 @@ import {
   jwtClaims,
   participantNamespace,
   pickVideoCodec,
+  retryDelay,
   ScreenRenditions,
   Serial,
   serverNamespace,
+  sleep,
   TrackName,
   type VideoQuality,
   type VideoResolution,
@@ -67,6 +69,8 @@ export type RoomEvents = {
   /** The server's active speakers changed; loudest first. */
   activeSpeakersChanged: [Participant[]];
   roomMetadataChanged: [string];
+  /** The number of read-only viewers of the room changed. */
+  viewerCountChanged: [number];
   /** A microphone, camera or speaker was chosen with switchActiveDevice. */
   activeDeviceChanged: [MediaDeviceKind, string];
 };
@@ -131,6 +135,11 @@ export class Room extends Emitter<RoomEvents> {
   activeSpeakers: Participant[] = [];
   readonly audio = new AudioOutput();
   readonly options: Required<RoomOptions>;
+  /**
+   * Connected with a viewer token: the room is watched read-only, and
+   * nothing can be published or sent.
+   */
+  isViewer = false;
 
   /** @internal */ session?: Session;
   private signal?: { sg: OutgoingSubgroup; next: number };
@@ -150,11 +159,21 @@ export class Room extends Emitter<RoomEvents> {
     this.options = { autoSubscribe: true, videoQuality: "medium", adaptiveStream: true, disconnectOnPageLeave: true, ...options };
   }
 
-  /** Joins the room the token grants, at a moqit node's WebTransport URL. */
+  /** Read-only viewers of the room, on every node; updated every few seconds. */
+  get numViewers(): number {
+    return this.info?.numViewers ?? 0;
+  }
+
+  /**
+   * Joins the room the token grants, at a moqit node's WebTransport URL.
+   * With a viewer token it watches the room instead, waiting for it to
+   * start if nobody has joined yet.
+   */
   async connect(url: string, token: string, opts: ConnectOptions = {}): Promise<void> {
     if (this.state !== ConnectionState.Disconnected) throw new Error("already connected");
     const claims = jwtClaims(token);
-    const identity = claims.sub ?? "";
+    this.isViewer = claims.grants?.room?.viewer === true;
+    const identity = claims.sub || (this.isViewer ? "viewer" : "");
     this.name = claims.grants?.room?.room ?? "";
     if (!identity || !this.name) throw new Error("token has no identity or room");
     this.setState(ConnectionState.Connecting);
@@ -175,17 +194,18 @@ export class Room extends Emitter<RoomEvents> {
       void this.session.closed.then((e) => this.handleClosed(e));
       this.localParticipant = new LocalParticipant(create_info(identity), this);
       const join = async (session: Session) => {
-        step = "announcing the participant";
-        await session.publishNamespace(participantNamespace(this.name, identity));
-        step = "subscribing to the inbox";
-        this.inboxSub = await session.subscribe({ namespace: inboxNamespace(this.name, identity), name: TrackName.Inbox });
-        void this.readInbox(this.inboxSub);
-        step = "subscribing to the room";
-        this.roomSub = await session.subscribe(
-          { namespace: serverNamespace(this.name), name: TrackName.Room },
-          { locationFilter: { type: 1, startGroup: 1 } },
-        );
-        void this.readRoom(this.roomSub);
+        if (this.isViewer) {
+          this.signalReady();
+          void this.followRoom(session);
+        } else {
+          step = "announcing the participant";
+          await session.publishNamespace(participantNamespace(this.name, identity));
+          step = "subscribing to the inbox";
+          this.inboxSub = await session.subscribe({ namespace: inboxNamespace(this.name, identity), name: TrackName.Inbox });
+          void this.readInbox(this.inboxSub);
+          step = "subscribing to the room";
+          void this.followRoom(session, await this.subscribeRoom(session));
+        }
         step = "waiting for the room state";
         await Promise.all([connected, signalReady]);
       };
@@ -324,6 +344,7 @@ export class Room extends Emitter<RoomEvents> {
 
   /** @internal Sends a ClientSignal and resolves when the server accepts it. */
   request(signal: ClientSignal["signal"]): Promise<void> {
+    if (this.isViewer) return Promise.reject(new Error(VIEWER_ERROR));
     const id = this.nextRequest++;
     const cs = create(ClientSignalSchema, { requestId: id, signal });
     return new Promise((resolve, reject) => {
@@ -378,13 +399,46 @@ export class Room extends Emitter<RoomEvents> {
     }
   }
 
+  private subscribeRoom(session: Session): Promise<Subscription> {
+    return session.subscribe({ namespace: serverNamespace(this.name), name: TrackName.Room }, { locationFilter: { type: 1, startGroup: 1 } });
+  }
+
+  // Follows the room track while connected, subscribing again when it
+  // ends or can't be had yet: a viewer's node may fetch it from a node
+  // that later closes the room, or that hasn't opened it yet.
+  private async followRoom(session: Session, first?: Subscription) {
+    const live = () => this.session === session && this.state !== ConnectionState.Disconnected;
+    for (let attempt = 0; live(); ) {
+      const sub = first ??
+        (await this.subscribeRoom(session).catch((e) => {
+          if (!(e instanceof RequestError) && live()) console.warn("moqit: room track", e);
+          return undefined;
+        }));
+      first = undefined;
+      if (sub) {
+        this.roomSub = sub;
+        await this.readRoom(sub).catch((e) => console.warn("moqit: room track", e));
+        attempt = 0;
+      }
+      if (!live()) return;
+      await sleep(retryDelay(attempt++));
+    }
+  }
+
+  private setInfo(info: RoomInfo | undefined) {
+    const old = this.info;
+    this.info = info;
+    if (old?.metadata !== undefined && old.metadata !== info?.metadata) this.emit("roomMetadataChanged", info?.metadata ?? "");
+    if ((old?.numViewers ?? 0) !== (info?.numViewers ?? 0)) this.emit("viewerCountChanged", info?.numViewers ?? 0);
+  }
+
   private async readRoom(sub: Subscription) {
     for await (const g of sub) {
       await eachObject(g, (o) => {
         const u = fromBinary(RoomStateUpdateSchema, o.payload);
         switch (u.update.case) {
           case "snapshot": {
-            this.info = u.update.value.room;
+            this.setInfo(u.update.value.room);
             const present = new Set<string>();
             for (const p of u.update.value.participants) {
               present.add(p.identity);
@@ -409,12 +463,9 @@ export class Room extends Emitter<RoomEvents> {
           case "speakersChanged":
             this.setSpeakers(u.update.value.speakers.map((sp) => sp.identity));
             break;
-          case "roomUpdated": {
-            const old = this.info?.metadata;
-            this.info = u.update.value;
-            if (old !== this.info.metadata) this.emit("roomMetadataChanged", this.info.metadata);
+          case "roomUpdated":
+            this.setInfo(u.update.value);
             break;
-          }
         }
       });
     }
@@ -422,7 +473,7 @@ export class Room extends Emitter<RoomEvents> {
 
   private setSpeakers(identities: string[]) {
     const next = identities
-      .map((id) => (id === this.localParticipant.identity ? this.localParticipant : this.remoteParticipants.get(id)))
+      .map((id) => (id === this.localParticipant.identity && !this.isViewer ? this.localParticipant : this.remoteParticipants.get(id)))
       .filter((p): p is LocalParticipant | RemoteParticipant => p !== undefined);
     if (next.length === this.activeSpeakers.length && next.every((p, i) => p === this.activeSpeakers[i])) return;
     this.activeSpeakers = next;
@@ -430,7 +481,7 @@ export class Room extends Emitter<RoomEvents> {
   }
 
   private applyParticipant(info: ParticipantInfo) {
-    if (info.identity === this.localParticipant.identity) {
+    if (info.identity === this.localParticipant.identity && !this.isViewer) {
       this.localParticipant.info = info;
       return;
     }
@@ -478,6 +529,8 @@ export class Room extends Emitter<RoomEvents> {
   }
 }
 
+const VIEWER_ERROR = "viewers cannot publish";
+
 function create_info(identity: string): ParticipantInfo {
   return { identity, sid: "", name: "", state: ParticipantState.JOINED, metadata: "", attributes: {}, tracks: [], joinedAt: 0n, nodeId: "" } as unknown as ParticipantInfo;
 }
@@ -522,7 +575,7 @@ export class RemoteParticipant extends Participant {
       this.trackPublications.set(t.sid, pub);
       if (t.kind === TrackKind.VIDEO && this.room.videoQuality) void pub.setVideoQuality(this.room.videoQuality);
       this.room.emitTrack("trackPublished", pub, this);
-      if (this.room.options.autoSubscribe) void pub.setSubscribed(true).catch((e) => console.warn("moqit: subscribe failed", e));
+      if (this.room.options.autoSubscribe) void pub.subscribeRetrying();
     }
     for (const [sid, pub] of this.trackPublications) {
       if (!seen.has(sid)) {
@@ -600,6 +653,7 @@ export class LocalParticipant extends Participant {
   /** Captures and sends the camera at the send resolution (setCameraResolution). */
   async setCameraEnabled(enabled: boolean, constraints: MediaTrackConstraints = this.cameraConstraints()): Promise<LocalVideoTrack | undefined> {
     if (!enabled) return void (await this.unpublish("camera"));
+    this.checkCanPublish();
     if (this.tracks.has("camera")) return this.tracks.get("camera") as LocalVideoTrack;
     const stream = await this.open("videoinput", constraints);
     this.videoCodec ??= pickVideoCodec();
@@ -610,6 +664,7 @@ export class LocalParticipant extends Participant {
 
   async setMicrophoneEnabled(enabled: boolean, constraints: MediaTrackConstraints = MIC_CONSTRAINTS): Promise<LocalAudioTrack | undefined> {
     if (!enabled) return void (await this.unpublish("microphone"));
+    this.checkCanPublish();
     if (this.tracks.has("microphone")) return this.tracks.get("microphone") as LocalAudioTrack;
     const stream = await this.open("audioinput", constraints);
     const track = new LocalAudioTrack(stream.getAudioTracks()[0], TrackSource.MICROPHONE);
@@ -720,6 +775,7 @@ export class LocalParticipant extends Participant {
       return;
     }
     if (this.tracks.has("screen")) return this.tracks.get("screen") as LocalVideoTrack;
+    this.checkCanPublish();
     const video = { frameRate: 15, ...((options.video as object | undefined) ?? {}) };
     let stream: MediaStream;
     try {
@@ -755,6 +811,7 @@ export class LocalParticipant extends Participant {
 
   /** Publishes a track: it is announced to the room and served on demand. */
   async publish(track: LocalTrack): Promise<LocalTrack> {
+    this.checkCanPublish();
     this.tracks.set(track.name, track);
     try {
       await this.syncTracks();
@@ -811,6 +868,7 @@ export class LocalParticipant extends Participant {
 
   /** Sends data to everyone in the room, or to destinationIdentities only. */
   async publishData(payload: Uint8Array, opts: DataOptions = {}): Promise<void> {
+    this.checkCanPublish();
     const topic = opts.topic ?? "";
     if (opts.destinationIdentities?.length) {
       return this.room.request({ case: "sendData", value: { $typeName: "moqit.v1.SendData", destinationIdentities: opts.destinationIdentities, topic, payload } });
@@ -820,6 +878,11 @@ export class LocalParticipant extends Participant {
 
   getTrack(source: TrackSource): LocalTrack | undefined {
     return [...this.tracks.values()].find((t) => t.source === source);
+  }
+
+  // Before any capture, so a viewer is never asked for camera or microphone access.
+  private checkCanPublish() {
+    if (this.room.isViewer) throw new Error(VIEWER_ERROR);
   }
 }
 
