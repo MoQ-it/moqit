@@ -143,7 +143,7 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	wts := &webtransport.Server{H3: h3, ApplicationProtocols: []string{v22.ALPN}, CheckOrigin: func(*http.Request) bool { return true }}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/moq", func(w http.ResponseWriter, req *http.Request) {
-		sess, err := wts.Upgrade(w, req)
+		sess, err := wt.Upgrade(wts, w, req)
 		if err != nil {
 			log.Info("webtransport upgrade failed", "remote", req.RemoteAddr, "user_agent", req.UserAgent(), "err", err)
 			w.WriteHeader(http.StatusBadRequest)
