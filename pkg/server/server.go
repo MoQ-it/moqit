@@ -145,7 +145,7 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	mux.HandleFunc("/moq", func(w http.ResponseWriter, req *http.Request) {
 		sess, err := wts.Upgrade(w, req)
 		if err != nil {
-			log.Debug("webtransport upgrade", "err", err)
+			log.Info("webtransport upgrade failed", "remote", req.RemoteAddr, "user_agent", req.UserAgent(), "err", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}

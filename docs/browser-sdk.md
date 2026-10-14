@@ -20,6 +20,8 @@ await room.localParticipant.setScreenShareEnabled(true);
 await room.localParticipant.publishData(new TextEncoder().encode("hi"), { topic: "chat" });
 ```
 
+`connect` rejects if a step of joining stalls for longer than `timeoutMs` (default 10 s), with the step in the message, e.g. `timed out opening a WebTransport session to …` or `timed out announcing the participant`. In a browser without WebTransport it rejects with `this browser does not support WebTransport`.
+
 Events follow LiveKit's: `participantConnected`, `trackPublished`, `trackSubscribed`, `trackMuted`, `activeSpeakersChanged`, `dataReceived`, `connectionStateChanged` and more (see `RoomEvents` in `room.ts`).
 
 ## Devices

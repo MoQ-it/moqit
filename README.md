@@ -6,7 +6,7 @@ moqit is a self-hostable platform for rooms with live audio, video, screen shari
 
 It comes with a browser SDK, React components, a server API with webhooks, a Go server SDK, and **Meet**, a ready-to-run conferencing web app.
 
-> **Status: experimental.** moqit implements MoQ Transport draft-22, which is still changing. It works in Chromium and Firefox and is tested end to end in both, but has not yet been tested on Safari, over real-world lossy networks, or at scale. Expect breaking changes.
+> **Status: experimental.** moqit implements MoQ Transport draft-22, which is still changing. It works in Chromium and Firefox and is tested end to end in both, but does not work on Safari yet and has not been tested over real-world lossy networks or at scale. Expect breaking changes.
 
 ## Why MoQ?
 
@@ -114,7 +114,7 @@ A node listens on one UDP port (WebTransport at `/moq`, plus raw QUIC for other 
 |---|---|
 | Chrome, Edge and other Chromium browsers | Supported, tested end to end |
 | Firefox | Supported, tested end to end (VP8 video) |
-| Safari 26.4+ | Expected to work; not yet tested |
+| Safari 26.4+ | Not working yet: joining does not complete on macOS |
 
 WebTransport is required; there is no WebSocket fallback.
 

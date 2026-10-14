@@ -93,6 +93,7 @@ export interface RoomOptions {
 export interface ConnectOptions {
   /** SHA-256 hashes of a development server's self-signed certificate. */
   serverCertificateHashes?: Uint8Array[];
+  /** How long each step of joining may take: the handshake, SETUP, and the rest (default 10000ms). */
   timeoutMs?: number;
 }
 
@@ -157,31 +158,50 @@ export class Room extends Emitter<RoomEvents> {
     this.name = claims.grants?.room?.room ?? "";
     if (!identity || !this.name) throw new Error("token has no identity or room");
     this.setState(ConnectionState.Connecting);
+    const timeoutMs = opts.timeoutMs ?? 10000;
+    let step = "";
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const signalReady = new Promise<void>((resolve) => (this.signalReady = resolve));
-      const connected = this.next("connected", opts.timeoutMs ?? 10000);
+      const connected = new Promise<void>((resolve) => this.once("connected", () => resolve()));
       this.session = await Session.connect({
         url,
         serverCertificateHashes: opts.serverCertificateHashes,
         authorizationToken: new TextEncoder().encode(token),
         handler: { onSubscribe: (req) => void this.handleSubscribe(req) },
+        readyTimeoutMs: timeoutMs,
+        setupTimeoutMs: timeoutMs,
       });
       void this.session.closed.then((e) => this.handleClosed(e));
       this.localParticipant = new LocalParticipant(create_info(identity), this);
-      await this.session.publishNamespace(participantNamespace(this.name, identity));
-      this.inboxSub = await this.session.subscribe({ namespace: inboxNamespace(this.name, identity), name: TrackName.Inbox });
-      void this.readInbox(this.inboxSub);
-      this.roomSub = await this.session.subscribe(
-        { namespace: serverNamespace(this.name), name: TrackName.Room },
-        { locationFilter: { type: 1, startGroup: 1 } },
-      );
-      void this.readRoom(this.roomSub);
-      await Promise.all([connected, signalReady]);
+      const join = async (session: Session) => {
+        step = "announcing the participant";
+        await session.publishNamespace(participantNamespace(this.name, identity));
+        step = "subscribing to the inbox";
+        this.inboxSub = await session.subscribe({ namespace: inboxNamespace(this.name, identity), name: TrackName.Inbox });
+        void this.readInbox(this.inboxSub);
+        step = "subscribing to the room";
+        this.roomSub = await session.subscribe(
+          { namespace: serverNamespace(this.name), name: TrackName.Room },
+          { locationFilter: { type: 1, startGroup: 1 } },
+        );
+        void this.readRoom(this.roomSub);
+        step = "waiting for the room state";
+        await Promise.all([connected, signalReady]);
+      };
+      await Promise.race([
+        join(this.session),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`timed out ${step}`)), timeoutMs);
+        }),
+      ]);
       if (this.options.disconnectOnPageLeave && typeof window !== "undefined") window.addEventListener("pagehide", this.onPageLeave);
     } catch (e) {
       this.session?.close();
       this.setState(ConnectionState.Disconnected);
       throw e;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

@@ -66,6 +66,7 @@ Restarting the node ends meetings in progress; participants rejoin by reloading 
 
 - **"Could not join" / WebTransport handshake failed:** UDP 4443 is blocked (cloud security groups often allow TCP only), or `MEET_DOMAIN` does not match the certificate. Check `docker compose logs moqit`.
 - **No certificate:** DNS does not point at the server yet, or TCP 80/443 are blocked. Check `docker compose logs caddy`.
+- **A browser stays on "connecting…" or reports a timeout:** the error names the step that stalled. A failed WebTransport handshake is logged by the node as `webtransport upgrade failed`, with the browser's user agent.
 - **Some participants cannot connect:** networks that block UDP block QUIC; moqit has no TCP fallback yet.
 
 ## Testing it locally
