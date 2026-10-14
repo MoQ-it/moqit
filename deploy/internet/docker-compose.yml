@@ -4,14 +4,13 @@
 #   cp .env.example .env       # set MEET_DOMAIN and MOQIT_API_SECRET
 #   docker compose up -d --build
 #
-# Open TCP 80 and 443 and UDP 4443. The build context is the directory
-# holding both moqit/ and moqt/.
+# Open TCP 80 and 443 and UDP 4443.
 
 name: moqit-meet
 
 x-build: &build
-  context: ../../..
-  dockerfile: moqit/deploy/Dockerfile
+  context: ../..
+  dockerfile: deploy/Dockerfile
 
 services:
   caddy:

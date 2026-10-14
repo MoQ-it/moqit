@@ -2,13 +2,28 @@
 
 Requirements: Go 1.26+, Node 22+, and Google Chrome and/or Firefox for the browser tests.
 
-[moqt](https://github.com/MoQ-it/moqt) is not published yet: `go.mod` has `replace github.com/MoQ-it/moqt => ../moqt`, and the web workspace links its TypeScript package, so clone it next to this repository:
+[moqt](https://github.com/MoQ-it/moqt) comes from GitHub at the commit pinned in `go.mod`. Its TypeScript package is not on npm yet, so the web workspace links it from a checkout next to this repository:
 
 ```sh
 git clone https://github.com/MoQ-it/moqt
 git clone https://github.com/MoQ-it/moqit
 cd moqit && (cd web && npm install)
 ```
+
+To work on both repositories at once, use the sibling checkout for Go too, with a `go.work` (ignored by git and by the Docker build):
+
+```sh
+go work init . ../moqt
+```
+
+Once moqt changes are pushed, pin them, and check that moqit builds and passes its tests without the workspace:
+
+```sh
+GOWORK=off go get github.com/MoQ-it/moqt@<commit> && GOWORK=off go mod tidy
+GOWORK=off go test -race ./...
+```
+
+The Docker image (`deploy/Dockerfile`, built from this directory alone) takes both the Go module and its TypeScript package from the pinned version.
 
 ## Tests
 

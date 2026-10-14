@@ -1,5 +1,7 @@
 connectrpc.com/connect v1.21.0 h1:LhqSJt7jHf5NJBo9Jq/t/9FjcYAideif0mg+qe2jCUs=
 connectrpc.com/connect v1.21.0/go.mod h1:A2ygJrukXwWy32vkCAAHNVguZrqZ+jeZ9rGRnGR4dN4=
+github.com/MoQ-it/moqt v0.0.0-20261014195953-17967b88a41d h1:uhIIW6EmTGr2kgW1JVZllAeScb3tqKsXIFxZ8d7Q6SE=
+github.com/MoQ-it/moqt v0.0.0-20261014195953-17967b88a41d/go.mod h1:sGBVRwD3zNh4NmXteFuBvts3t1OGoK2UpcwPUnYT5Eg=
 github.com/alicebob/miniredis/v2 v2.40.0 h1:6IgTQbvm2JiMYZ8yur/acNJzVjtSOWCelxXbk/LUBXc=
 github.com/alicebob/miniredis/v2 v2.40.0/go.mod h1:TcL7YfarKPGDAthEtl5NBeHZfeUQj6OXMm/+iu5cLMM=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=

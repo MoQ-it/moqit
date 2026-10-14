@@ -1,6 +1,8 @@
-# Paths are relative to the build context: the directory holding moqit/ and moqt/.
+# Paths are relative to the build context: the moqit directory.
 **/node_modules
 **/dist
 **/.git
 **/.ff-profile-*
-moqit/spikes
+go.work
+go.work.sum
+spikes

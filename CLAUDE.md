@@ -1,6 +1,6 @@
 # moqit - Claude Code Instructions
 
-moqit depends on the sibling repository `../moqt` (MoQ transport library, Go + TS) through a `replace` in `go.mod`. Changes there follow the same rules below.
+moqit depends on the moqt repository (MoQ transport library, Go + TS), pinned to a commit in `go.mod`. Locally it is checked out at `../moqt`; a git-ignored `go.work` makes Go use that checkout, and the web workspace always links `../moqt/ts`. Changes there follow the same rules below. After moqt changes are pushed, pin them with `GOWORK=off go get github.com/MoQ-it/moqt@<commit> && GOWORK=off go mod tidy` and run `GOWORK=off go test -race ./...`; the Docker image uses only the pinned version.
 
 ## After every code change
 

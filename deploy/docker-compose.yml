@@ -1,6 +1,6 @@
 # A two-node development cluster with Redis and the Meet app.
-#   docker build -f moqit/deploy/Dockerfile -t moqit .   (from the parent of moqit/ and moqt/)
-#   docker compose -f moqit/deploy/docker-compose.yml up
+#   docker build -f deploy/Dockerfile -t moqit .   (from moqit/)
+#   docker compose -f deploy/docker-compose.yml up
 # Then open http://localhost:8080. Nodes use self-signed certificates
 # (-dev); browsers accept them through the hash /v1/route returns.
 x-node: &node

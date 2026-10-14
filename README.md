@@ -32,7 +32,7 @@ It comes with a browser SDK, React components, a server API with webhooks, a Go 
 
 ## Quick start
 
-Requirements: Go 1.26+, Node 22+, and Chrome or Firefox. moqit uses the [moqt](https://github.com/MoQ-it/moqt) library from a sibling checkout until it is published:
+Requirements: Go 1.26+, Node 22+, and Chrome or Firefox. moqit uses the [moqt](https://github.com/MoQ-it/moqt) library: Go fetches the version pinned in `go.mod`, and the web app links its TypeScript package from a sibling checkout until that is on npm:
 
 ```sh
 git clone https://github.com/MoQ-it/moqt

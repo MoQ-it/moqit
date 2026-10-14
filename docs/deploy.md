@@ -15,12 +15,10 @@ Browsers load the app from `https://<domain>` and connect to the node at `https:
 - A server with Docker (Compose v2) and a public IP address.
 - A DNS name pointing at it (an `A` and/or `AAAA` record), e.g. `meet.example.com`.
 - Open in the firewall: **TCP 80** and **TCP 443** (web app and certificate issuance) and **UDP 4443** (media).
-- moqt checked out next to moqit, as for development: the image is built from the directory holding both.
 
 ## Start
 
 ```sh
-git clone https://github.com/MoQ-it/moqt
 git clone https://github.com/MoQ-it/moqit
 cd moqit/deploy/internet
 cp .env.example .env
@@ -50,7 +48,7 @@ sudo sysctl -w net.core.rmem_max=7500000 net.core.wmem_max=7500000
 ## Updating
 
 ```sh
-git -C ../../../moqt pull && git pull
+git pull
 docker compose up -d --build
 ```
 
