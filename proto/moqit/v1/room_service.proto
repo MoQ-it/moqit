@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package moqit.v1;
+
+import "moqit/v1/models.proto";
+
+option go_package = "github.com/MoQ-it/moqit/proto/moqit/v1;moqitv1";
+
+// RoomService manages rooms and participants from an application backend.
+// Served over Connect (JSON or protobuf over HTTP POST, and gRPC) on a
+// node's HTTP port at /moqit.v1.RoomService/<Method>, authenticated with
+// "Authorization: Bearer <access token>". Required grants:
+//   CreateRoom, DeleteRoom   grants.room.create
+//   ListRooms                grants.room.list
+//   everything else          grants.room.admin, with grants.room.room equal
+//                            to the request's room (empty = every room)
+service RoomService {
+  rpc CreateRoom(CreateRoomRequest) returns (CreateRoomResponse);
+  rpc ListRooms(ListRoomsRequest) returns (ListRoomsResponse);
+  rpc DeleteRoom(DeleteRoomRequest) returns (DeleteRoomResponse);
+  rpc UpdateRoomMetadata(UpdateRoomMetadataRequest) returns (UpdateRoomMetadataResponse);
+  rpc ListParticipants(ListParticipantsRequest) returns (ListParticipantsResponse);
+  rpc GetParticipant(GetParticipantRequest) returns (GetParticipantResponse);
+  rpc RemoveParticipant(RemoveParticipantRequest) returns (RemoveParticipantResponse);
+  rpc UpdateParticipant(UpdateParticipantRequest) returns (UpdateParticipantResponse);
+  rpc MuteTrack(MuteTrackRequest) returns (MuteTrackResponse);
+  rpc SendData(SendDataRequest) returns (SendDataResponse);
+}
+
+message CreateRoomRequest {
+  string name = 1;
+  uint32 empty_timeout = 2; // seconds to wait for a first participant; 0 = default
+  uint32 departure_timeout = 3; // seconds the room lives on after the last participant; 0 = default
+  uint32 max_participants = 4; // 0 = unlimited
+  string metadata = 5;
+}
+
+message CreateRoomResponse {
+  Room room = 1;
+}
+
+message ListRoomsRequest {
+  repeated string names = 1; // empty = all rooms
+}
+
+message ListRoomsResponse {
+  repeated Room rooms = 1;
+}
+
+message DeleteRoomRequest {
+  string room = 1;
+}
+
+message DeleteRoomResponse {}
+
+message UpdateRoomMetadataRequest {
+  string room = 1;
+  string metadata = 2;
+}
+
+message UpdateRoomMetadataResponse {
+  Room room = 1;
+}
+
+message ListParticipantsRequest {
+  string room = 1;
+}
+
+message ListParticipantsResponse {
+  repeated ParticipantInfo participants = 1;
+}
+
+message GetParticipantRequest {
+  string room = 1;
+  string identity = 2;
+}
+
+message GetParticipantResponse {
+  ParticipantInfo participant = 1;
+}
+
+message RemoveParticipantRequest {
+  string room = 1;
+  string identity = 2;
+}
+
+message RemoveParticipantResponse {}
+
+message UpdateParticipantRequest {
+  string room = 1;
+  string identity = 2;
+  optional string name = 3;
+  optional string metadata = 4;
+  map<string, string> attributes = 5; // merged; an empty value deletes the key
+  ParticipantPermission permission = 6; // replaces the permission when set
+}
+
+message UpdateParticipantResponse {
+  ParticipantInfo participant = 1;
+}
+
+message MuteTrackRequest {
+  string room = 1;
+  string identity = 2;
+  string track_sid = 3;
+  bool muted = 4;
+}
+
+message MuteTrackResponse {}
+
+message SendDataRequest {
+  string room = 1;
+  repeated string destination_identities = 2; // empty = everyone
+  string topic = 3;
+  bytes payload = 4;
+}
+
+message SendDataResponse {}
+
+// The body of a webhook POST (JSON). The Moqit-Signature header carries a
+// JWT signed with the API secret whose "sha256" claim is the base64
+// SHA-256 of the body.
+message WebhookEvent {
+  string id = 1; // unique per event
+  string event = 2; // room_started, room_finished, participant_joined, participant_left, track_published, track_unpublished
+  int64 created_at = 3; // unix seconds
+  Room room = 4;
+  ParticipantInfo participant = 5;
+  TrackInfo track = 6;
+}

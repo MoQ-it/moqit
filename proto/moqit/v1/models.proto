@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package moqit.v1;
+
+option go_package = "github.com/MoQ-it/moqit/proto/moqit/v1;moqitv1";
+
+// A room. Rooms are created on first join (or by the admin API) and deleted
+// after the last participant leaves and departure_timeout passes.
+message Room {
+  string sid = 1;
+  string name = 2;
+  string metadata = 3;
+  uint32 empty_timeout = 4; // seconds a created room waits for its first participant
+  uint32 departure_timeout = 5; // seconds a room lives on after the last participant leaves
+  uint32 max_participants = 6; // 0 = unlimited
+  uint32 num_participants = 7;
+  int64 created_at = 8; // unix ms
+}
+
+enum TrackKind {
+  TRACK_KIND_UNSPECIFIED = 0;
+  TRACK_KIND_AUDIO = 1;
+  TRACK_KIND_VIDEO = 2;
+}
+
+enum TrackSource {
+  TRACK_SOURCE_UNSPECIFIED = 0;
+  TRACK_SOURCE_CAMERA = 1;
+  TRACK_SOURCE_MICROPHONE = 2;
+  TRACK_SOURCE_SCREEN = 3;
+  TRACK_SOURCE_SCREEN_AUDIO = 4;
+}
+
+// One encoding of a track, published as its own MoQ track in the
+// participant's namespace ("moqit", room, "p", identity).
+message Rendition {
+  string track_name = 1; // MoQ track name, e.g. "camera-h"
+  uint32 width = 2;
+  uint32 height = 3;
+  uint32 bitrate = 4; // bits per second
+  uint32 framerate = 5;
+}
+
+message TrackInfo {
+  string sid = 1; // assigned by the server
+  TrackKind kind = 2;
+  TrackSource source = 3;
+  string name = 4; // the publisher's name for the track, e.g. "camera"
+  bool muted = 5;
+  string codec = 6; // WebCodecs codec string, e.g. "avc1.42e01f", "opus"
+  repeated Rendition renditions = 7;
+}
+
+message ParticipantPermission {
+  bool can_subscribe = 1;
+  bool can_publish = 2;
+  bool can_publish_data = 3;
+  repeated TrackSource can_publish_sources = 4; // empty = all sources
+  bool can_update_metadata = 5;
+  bool hidden = 6; // not listed in room state
+}
+
+enum ParticipantState {
+  PARTICIPANT_STATE_UNSPECIFIED = 0;
+  PARTICIPANT_STATE_JOINED = 1; // session established
+  PARTICIPANT_STATE_ACTIVE = 2; // namespace published, signal track subscribed
+  PARTICIPANT_STATE_DISCONNECTED = 3;
+}
+
+message ParticipantInfo {
+  string sid = 1;
+  string identity = 2;
+  string name = 3;
+  ParticipantState state = 4;
+  string metadata = 5;
+  map<string, string> attributes = 6;
+  ParticipantPermission permission = 7;
+  repeated TrackInfo tracks = 8;
+  int64 joined_at = 9; // unix ms
+  string node_id = 10;
+}
+
+enum DisconnectReason {
+  DISCONNECT_REASON_UNSPECIFIED = 0;
+  DISCONNECT_REASON_CLIENT_INITIATED = 1;
+  DISCONNECT_REASON_DUPLICATE_IDENTITY = 2;
+  DISCONNECT_REASON_SERVER_SHUTDOWN = 3;
+  DISCONNECT_REASON_PARTICIPANT_REMOVED = 4;
+  DISCONNECT_REASON_ROOM_DELETED = 5;
+  DISCONNECT_REASON_CONNECTION_LOST = 6;
+}
+
+message SpeakerInfo {
+  string identity = 1;
+  float level = 2; // 0..1
+}
+
+enum ConnectionQuality {
+  CONNECTION_QUALITY_UNSPECIFIED = 0;
+  CONNECTION_QUALITY_POOR = 1;
+  CONNECTION_QUALITY_GOOD = 2;
+  CONNECTION_QUALITY_EXCELLENT = 3;
+  CONNECTION_QUALITY_LOST = 4;
+}

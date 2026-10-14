@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package moqit.v1;
+
+import "moqit/v1/models.proto";
+import "moqit/v1/room_service.proto";
+import "moqit/v1/signal.proto";
+
+option go_package = "github.com/MoQ-it/moqit/proto/moqit/v1;moqitv1";
+
+// Messages exchanged between moqit nodes through Redis; not seen by clients.
+
+// One entry of a room's event stream (Redis stream moqit:room:<name>:events).
+message ClusterRoomEvent {
+  string node_id = 1; // the node that made the change
+  oneof event {
+    ParticipantInfo participant_put = 2; // joined or changed
+    ParticipantLeft participant_left = 3;
+    Room room_updated = 4;
+  }
+}
+
+// An admin command for whichever node hosts the participant
+// (Redis channel moqit:room:<name>:cmd).
+message ClusterCommand {
+  oneof command {
+    string remove_participant = 1; // identity
+    UpdateParticipantRequest update_participant = 2;
+    MuteTrackRequest mute_track = 3;
+    bool delete_room = 4;
+  }
+}
+
+// Data for a participant on another node (Redis channel moqit:room:<name>:direct).
+message ClusterDirect {
+  string identity = 1;
+  InboxMessage message = 2;
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@moqit/client",
+  "version": "0.1.0",
+  "description": "Browser SDK for moqit: rooms, participants and tracks over Media over QUIC",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.16.0",
+    "@moq-it/moqt": "file:../../../../moqt/ts"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "^2.16.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}

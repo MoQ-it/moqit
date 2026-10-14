@@ -1,0 +1,13 @@
+version: v2
+plugins:
+  - local: ["go", "run", "google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12"]
+    out: .
+    opt: module=github.com/MoQ-it/moqit
+  - local: ["go", "run", "connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.21.0"]
+    out: .
+    opt: module=github.com/MoQ-it/moqit
+  - local: web/node_modules/.bin/protoc-gen-es
+    out: web/packages/client/src/gen
+    opt:
+      - target=ts
+      - import_extension=ts

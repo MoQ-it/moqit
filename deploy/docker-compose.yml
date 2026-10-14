@@ -1,0 +1,34 @@
+# A two-node development cluster with Redis and the Meet app.
+#   docker build -f moqit/deploy/Dockerfile -t moqit .   (from the parent of moqit/ and moqt/)
+#   docker compose -f moqit/deploy/docker-compose.yml up
+# Then open http://localhost:8080. Nodes use self-signed certificates
+# (-dev); browsers accept them through the hash /v1/route returns.
+x-node: &node
+  image: moqit
+  depends_on: [redis]
+  environment:
+    MOQIT_REDIS: redis://redis:6379/0
+
+services:
+  redis:
+    image: redis:7-alpine
+
+  node1:
+    <<: *node
+    command: ["-dev", "-udp", ":4443", "-http", ":7880", "-node-id", "node1",
+              "-advertise", "node1:4443", "-public-url", "https://localhost:4443/moq"]
+    ports: ["4443:4443/udp", "7880:7880"]
+
+  node2:
+    <<: *node
+    command: ["-dev", "-udp", ":4444", "-http", ":7880", "-node-id", "node2",
+              "-advertise", "node2:4444", "-public-url", "https://localhost:4444/moq"]
+    ports: ["4444:4444/udp", "7881:7880"]
+
+  meet:
+    image: moqit
+    entrypoint: ["/usr/local/bin/meet"]
+    command: ["-addr", ":8080", "-static", "/srv/meet", "-route-url", "http://node1:7880/v1/route",
+              "-key", "devkey", "-secret", "secret-for-development-only-0123456789"]
+    depends_on: [node1, node2]
+    ports: ["8080:8080"]

@@ -1,0 +1,114 @@
+syntax = "proto3";
+
+package moqit.v1;
+
+import "moqit/v1/models.proto";
+
+option go_package = "github.com/MoQ-it/moqit/proto/moqit/v1;moqitv1";
+
+// Room signalling travels over MoQ tracks rather than a separate socket:
+//
+//   ("moqit", room, "srv") / "room"            server -> everyone: RoomStateUpdate
+//   ("moqit", room, "srv", "to", id) / "inbox" server -> one participant: InboxMessage
+//   ("moqit", room, "p", id) / "signal"        participant -> server: ClientSignal
+//
+// Each MoQ Object carries one message. The room track starts every Group
+// with a snapshot followed by deltas, so a subscriber joining at the start
+// of the current Group gets the full state.
+
+message RoomStateUpdate {
+  uint64 version = 1; // increases by one per update within a room
+  oneof update {
+    RoomSnapshot snapshot = 2;
+    ParticipantInfo participant_updated = 3; // joined or changed; full info
+    ParticipantLeft participant_left = 4;
+    Room room_updated = 5;
+    SpeakersChanged speakers_changed = 6;
+  }
+}
+
+message RoomSnapshot {
+  Room room = 1;
+  repeated ParticipantInfo participants = 2;
+  repeated SpeakerInfo speakers = 3;
+}
+
+message ParticipantLeft {
+  string identity = 1;
+  string sid = 2;
+  DisconnectReason reason = 3;
+}
+
+message SpeakersChanged {
+  repeated SpeakerInfo speakers = 1; // loudest first; absent = silent
+}
+
+message ClientSignal {
+  uint64 request_id = 1; // echoed in the RequestResponse on the inbox; 0 = no response
+  oneof signal {
+    UpdateParticipant update_participant = 2;
+    SetTracks set_tracks = 3;
+    SendData send_data = 4;
+  }
+}
+
+message UpdateParticipant {
+  optional string name = 1;
+  optional string metadata = 2;
+  map<string, string> attributes = 3; // merged; an empty value deletes the key
+}
+
+// The full list of tracks the participant publishes, replacing the previous
+// one. The server assigns sids and checks publish permissions.
+message SetTracks {
+  repeated TrackInfo tracks = 1;
+}
+
+// Data for specific participants, delivered through their inboxes. Data for
+// everyone goes on the sender's own "data" track instead.
+message SendData {
+  repeated string destination_identities = 1;
+  string topic = 2;
+  bytes payload = 3;
+}
+
+message InboxMessage {
+  oneof message {
+    RequestResponse response = 1;
+    DataReceived data = 2;
+    string refresh_token = 3;
+    MuteTrackCommand mute_track = 4; // the server asks the participant to (un)mute a track
+  }
+}
+
+message MuteTrackCommand {
+  string track_sid = 1;
+  bool muted = 2;
+}
+
+enum RequestResult {
+  REQUEST_RESULT_UNSPECIFIED = 0;
+  REQUEST_RESULT_OK = 1;
+  REQUEST_RESULT_NOT_ALLOWED = 2;
+  REQUEST_RESULT_INVALID = 3;
+  REQUEST_RESULT_NOT_FOUND = 4;
+}
+
+message RequestResponse {
+  uint64 request_id = 1;
+  RequestResult result = 2;
+  string message = 3;
+}
+
+message DataReceived {
+  string from_identity = 1;
+  string topic = 2;
+  bytes payload = 3;
+}
+
+// One message on a participant's "data" (reliable) or "data-lossy" track,
+// read by every subscriber.
+message DataPacket {
+  string topic = 1;
+  bytes payload = 2;
+}

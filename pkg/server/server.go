@@ -1,0 +1,319 @@
+// Package server runs a moqit node: one UDP socket serving MoQ over
+// WebTransport (browsers, path /moq) and raw QUIC (native clients, other
+// nodes), with a room.Manager authorizing everything.
+package server
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"math/big"
+	"net"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/MoQ-it/moqit/pkg/auth"
+	"github.com/MoQ-it/moqit/pkg/cluster"
+	"github.com/MoQ-it/moqit/pkg/room"
+	"github.com/MoQ-it/moqit/pkg/service"
+	"github.com/MoQ-it/moqt"
+	"github.com/MoQ-it/moqt/transport/rawquic"
+	"github.com/MoQ-it/moqt/transport/wt"
+	v22 "github.com/MoQ-it/moqt/wire/v22"
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
+	"github.com/quic-go/webtransport-go"
+)
+
+// Config configures a node.
+type Config struct {
+	// UDPAddr to listen on. Listen dual-stack (":port"): Chrome resolves
+	// localhost to ::1 for WebTransport.
+	UDPAddr string
+	Keys    auth.KeyProvider
+	// Certificate for QUIC. SelfSignedCert makes one that browsers accept
+	// through serverCertificateHashes.
+	Certificate      tls.Certificate
+	DepartureTimeout time.Duration
+	MaxParticipants  int
+	Logger           *slog.Logger
+
+	// Cluster, if set, joins this node to a cluster sharing the Redis
+	// behind it. Other nodes reach this one at AdvertiseAddr (host:port of
+	// the UDP socket); clients are sent to PublicURL.
+	Cluster       *cluster.Cluster
+	AdvertiseAddr string
+	PublicURL     string
+	Region        string
+	// ExposeCertHash adds the chosen node's certificate hash to /v1/route
+	// answers, for development clusters with self-signed certificates.
+	ExposeCertHash bool
+	// Webhook receives room and participant events; *webhook.Notifier.
+	Webhook room.Notifier
+}
+
+// Server is a running node.
+type Server struct {
+	Manager *room.Manager
+	// Addr is the UDP address actually bound.
+	Addr net.Addr
+	// CertHash is the SHA-256 of the certificate, for serverCertificateHashes.
+	CertHash [32]byte
+
+	publicURL      string
+	exposeCertHash bool
+	cluster        *cluster.Cluster
+	keys           auth.KeyProvider
+	ln             *quic.EarlyListener
+	wts            *webtransport.Server
+	cancel         context.CancelFunc
+}
+
+// Start starts a node; it runs until Close or ctx ends.
+// A client that vanishes without closing (crashed tab, lost network) is
+// dropped after idleTimeout of silence; keep-alives stop a quiet but live
+// connection from reaching it. (quic-go's default is 30 s.)
+const (
+	idleTimeout = 15 * time.Second
+	keepAlive   = 5 * time.Second
+)
+
+func Start(ctx context.Context, cfg Config) (*Server, error) {
+	if len(cfg.Keys) == 0 {
+		return nil, errors.New("server: no API keys")
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.DiscardHandler)
+	}
+	log := cfg.Logger
+	var serverKey string
+	for k := range cfg.Keys {
+		serverKey = k
+		break
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	cert := cfg.Certificate
+	certHash := sha256.Sum256(cert.Certificate[0])
+	m := room.New(room.Config{
+		Keys: cfg.Keys, ServerKey: serverKey, DepartureTimeout: cfg.DepartureTimeout, MaxParticipants: cfg.MaxParticipants, Logger: log,
+		Cluster:  cfg.Cluster,
+		Webhook:  cfg.Webhook,
+		Node:     cluster.NodeInfo{QUICAddr: cfg.AdvertiseAddr, PublicURL: cfg.PublicURL, CertSHA256: hex.EncodeToString(certHash[:]), Region: cfg.Region},
+		DialPeer: dialPeer,
+	})
+
+	tlsConf := &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{v22.ALPN, http3.NextProtoH3}}
+	qconf := &quic.Config{
+		EnableDatagrams:                  true,
+		EnableStreamResetPartialDelivery: true,
+		MaxIncomingStreams:               1 << 12,
+		MaxIncomingUniStreams:            1 << 14,
+		MaxIdleTimeout:                   idleTimeout,
+		KeepAlivePeriod:                  keepAlive,
+	}
+	h3 := &http3.Server{TLSConfig: tlsConf, QUICConfig: qconf}
+	webtransport.ConfigureHTTP3Server(h3)
+	wts := &webtransport.Server{H3: h3, ApplicationProtocols: []string{v22.ALPN}, CheckOrigin: func(*http.Request) bool { return true }}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/moq", func(w http.ResponseWriter, req *http.Request) {
+		sess, err := wts.Upgrade(w, req)
+		if err != nil {
+			log.Debug("webtransport upgrade", "err", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := m.Serve(ctx, wt.New(sess), req.URL.Query().Get("token")); err != nil {
+			log.Debug("session rejected", "remote", req.RemoteAddr, "err", err)
+		}
+	})
+	h3.Handler = mux
+
+	ln, err := quic.ListenAddrEarly(cfg.UDPAddr, tlsConf, qconf)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept(ctx)
+			if err != nil {
+				return
+			}
+			switch conn.ConnectionState().TLS.NegotiatedProtocol {
+			case v22.ALPN:
+				go func() {
+					if err := m.Serve(ctx, rawquic.New(conn), ""); err != nil {
+						log.Debug("session rejected", "remote", conn.RemoteAddr(), "err", err)
+					}
+				}()
+			case http3.NextProtoH3:
+				go wts.ServeQUICConn(conn)
+			default:
+				conn.CloseWithError(0x10, "unsupported ALPN")
+			}
+		}
+	}()
+
+	// The manager's own session dials this node over loopback, pinning our
+	// certificate.
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	err = m.Start(ctx, func(ctx context.Context) (moqt.Conn, error) {
+		return dialPeer(ctx, net.JoinHostPort("127.0.0.1", port), hex.EncodeToString(certHash[:]))
+	})
+	if err != nil {
+		ln.Close()
+		cancel()
+		return nil, err
+	}
+	return &Server{Manager: m, Addr: ln.Addr(), CertHash: certHash, publicURL: cfg.PublicURL, exposeCertHash: cfg.ExposeCertHash, cluster: cfg.Cluster, keys: cfg.Keys, ln: ln, wts: wts, cancel: cancel}, nil
+}
+
+// dialPeer opens a raw QUIC MoQ connection to a node, accepting only the
+// certificate with the given SHA-256: node certificates are often
+// self-signed, and the cluster registry vouches for them.
+func dialPeer(ctx context.Context, addr, certSHA256 string) (moqt.Conn, error) {
+	want, err := hex.DecodeString(certSHA256)
+	if err != nil {
+		return nil, err
+	}
+	c, err := quic.DialAddr(ctx, addr, &tls.Config{
+		InsecureSkipVerify: true, // replaced by the pin below
+		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
+			if len(raw) == 0 {
+				return errors.New("no certificate")
+			}
+			if sum := sha256.Sum256(raw[0]); !bytes.Equal(sum[:], want) {
+				return errors.New("node certificate does not match the cluster registry")
+			}
+			return nil
+		},
+		NextProtos: []string{v22.ALPN},
+	}, &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true, MaxIncomingUniStreams: 1 << 14, MaxIdleTimeout: idleTimeout, KeepAlivePeriod: keepAlive})
+	if err != nil {
+		return nil, err
+	}
+	return rawquic.New(c), nil
+}
+
+// APIHandler serves the node's HTTP API: the RoomService (Connect, at
+// /moqit.v1.RoomService/), GET /v1/route and GET /healthz.
+func (s *Server) APIHandler() http.Handler {
+	mux := http.NewServeMux()
+	path, h := service.NewRoomService(s.Manager, s.keys)
+	mux.Handle(path, h)
+	mux.Handle("GET /v1/route", s.RouteHandler())
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
+	return mux
+}
+
+// RouteHandler serves GET /v1/route?token=... (or Authorization: Bearer):
+// it returns {"url": ...}, the WebTransport URL of the node the client
+// should join, preferring nodes already hosting the token's room, then the
+// least loaded. Without a cluster it returns this node.
+func (s *Server) RouteHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		token := r.URL.Query().Get("token")
+		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+			token = strings.TrimPrefix(h, "Bearer ")
+		}
+		claims, err := s.keys.Verify(token)
+		if err != nil || claims.Grants.Room == nil || !claims.Grants.Room.Join {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		out := map[string]string{"url": s.publicURL}
+		if s.exposeCertHash {
+			out["certHash"] = hex.EncodeToString(s.CertHash[:])
+		}
+		if s.cluster != nil {
+			if n, err := s.pickNode(r.Context(), claims.Grants.Room.Room); err == nil && n != nil {
+				out["url"] = n.PublicURL
+				if s.exposeCertHash {
+					out["certHash"] = n.CertSHA256
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
+	})
+}
+
+func (s *Server) pickNode(ctx context.Context, room string) (*cluster.NodeInfo, error) {
+	nodes, err := s.cluster.Nodes(ctx)
+	if err != nil || len(nodes) == 0 {
+		return nil, err
+	}
+	_, ps, err := s.cluster.Participants(ctx, room)
+	if err != nil {
+		return nil, err
+	}
+	hosting := map[string]bool{}
+	for _, p := range ps {
+		hosting[p.NodeId] = true
+	}
+	slices.SortFunc(nodes, func(a, b cluster.NodeInfo) int {
+		if hosting[a.ID] != hosting[b.ID] {
+			if hosting[a.ID] {
+				return -1
+			}
+			return 1
+		}
+		return a.Participants - b.Participants
+	})
+	return &nodes[0], nil
+}
+
+// Port returns the UDP port.
+func (s *Server) Port() string {
+	_, port, _ := net.SplitHostPort(s.Addr.String())
+	return port
+}
+
+func (s *Server) Close() error {
+	s.cancel()
+	s.wts.Close()
+	return s.ln.Close()
+}
+
+// SelfSignedCert makes a certificate browsers accept through WebTransport
+// serverCertificateHashes: ECDSA P-256, valid for under 14 days.
+func SelfSignedCert(hosts string) (tls.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	tmpl := x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: "moqit-dev"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(13 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	for h := range strings.SplitSeq(hosts, ",") {
+		if ip := net.ParseIP(h); ip != nil {
+			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
+		} else if h != "" {
+			tmpl.DNSNames = append(tmpl.DNSNames, h)
+		}
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+}

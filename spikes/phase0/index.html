@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>moqit Phase 0</title>
+<style>
+  :root { color-scheme: light dark; --ok: #2e7d32; --bad: #c62828; --muted: #888; }
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0 auto; max-width: 980px; padding: 16px; }
+  h1 { font-size: 20px; } h2 { font-size: 16px; margin-top: 28px; }
+  section { border-top: 1px solid #8884; }
+  table { border-collapse: collapse; } td { padding: 2px 10px 2px 0; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+  pre { background: #8881; padding: 8px; max-height: 260px; overflow: auto; white-space: pre-wrap; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+  video, canvas { width: 320px; height: 180px; background: #000; }
+  input[type=number] { width: 70px; }
+</style>
+</head>
+<body>
+<h1>moqit Phase 0 checks</h1>
+<p class="muted" id="ua"></p>
+
+<section>
+  <h2>1. Capabilities</h2>
+  <table id="capsTable"></table>
+</section>
+
+<section>
+  <h2>2. WebTransport</h2>
+  <div class="row">
+    <button id="btnConnect">Connect</button>
+    <button id="btnEcho">Echo tests</button>
+  </div>
+  <div class="row">
+    Stream-rate stress: <input id="stressRate" type="number" value="50"> streams/s ×
+    <input id="stressTracks" type="number" value="1"> tracks for
+    <input id="stressSecs" type="number" value="30"> s
+    <button id="btnStress">Run</button>
+  </div>
+  <div class="row">
+    Long session: <input id="longMins" type="number" value="30"> min
+    <button id="btnLong">Run</button> <span id="longStatus" class="muted"></span>
+  </div>
+  <pre id="wtLog"></pre>
+</section>
+
+<section>
+  <h2>3. Video loopback (capture → encode → decode → render)</h2>
+  <div class="row">
+    Codec <select id="vcodec">
+      <option value="avc1.42e01f">H.264 baseline</option>
+      <option value="vp8">VP8</option>
+      <option value="vp09.00.10.08">VP9</option>
+      <option value="av01.0.04M.08">AV1</option>
+    </select>
+    Capture <select id="capMode"><option value="auto">auto</option><option value="mstp-window">MSTP window</option><option value="mstp-worker">MSTP worker</option><option value="rvfc">rVFC + VideoFrame(video)</option></select>
+    Render <select id="renderMode"><option value="auto">auto</option><option value="mstg">MediaStreamTrackGenerator</option><option value="vtg">VideoTrackGenerator</option><option value="canvas">canvas</option></select>
+    <label><input id="viaWT" type="checkbox" checked> through WebTransport echo</label>
+    <button id="btnVideo">Start</button> <button id="btnVideoStop">Stop</button>
+  </div>
+  <div class="row"><video id="localPreview" autoplay muted playsinline></video><span id="remoteSlot"></span></div>
+  <pre id="videoLog"></pre>
+</section>
+
+<section>
+  <h2>4. Echo cancellation with non-&lt;audio&gt; playout</h2>
+  <p class="muted">Needs loudspeakers (not headphones) and a quiet room. Plays speech-like noise through three playout paths, once with echoCancellation off and once on, and measures how much reaches the microphone.</p>
+  <div class="row"><button id="btnAec">Run AEC test</button></div>
+  <pre id="aecLog"></pre>
+</section>
+
+<section>
+  <h2>Results</h2>
+  <div class="row"><button id="btnReport">Send report to server log</button><button id="btnCopy">Copy JSON</button></div>
+  <pre id="results"></pre>
+</section>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const results = { ua: navigator.userAgent, at: new Date().toISOString(), caps: {}, wt: {}, video: {}, aec: {} };
+function log(id, msg) { const el = $(id); el.textContent += msg + '\n'; el.scrollTop = el.scrollHeight; }
+function showResults() { $('results').textContent = JSON.stringify(results, null, 2); }
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+function stats(arr) {
+  if (!arr.length) return { n: 0 };
+  const s = [...arr].sort((a, b) => a - b);
+  const q = (p) => Math.round(s[Math.min(s.length - 1, Math.floor(p * s.length))] * 10) / 10;
+  return { n: s.length, p50: q(0.5), p95: q(0.95), max: q(1) };
+}
+function hexToBytes(h) { const b = new Uint8Array(h.length / 2); for (let i = 0; i < b.length; i++) b[i] = parseInt(h.substr(i * 2, 2), 16); return b; }
+$('ua').textContent = navigator.userAgent;
+
+// ---------- worker (capture via MSTP, render via VideoTrackGenerator) ----------
+const workerSrc = `
+let vtgWriter;
+self.onmessage = async (e) => {
+  const m = e.data;
+  if (m.cmd === 'caps') {
+    postMessage({ caps: {
+      'MediaStreamTrackProcessor (worker)': typeof MediaStreamTrackProcessor === 'function',
+      'VideoTrackGenerator (worker)': typeof VideoTrackGenerator === 'function',
+      'VideoEncoder (worker)': typeof VideoEncoder === 'function',
+      'WebTransport (worker)': typeof WebTransport === 'function',
+    }});
+  } else if (m.cmd === 'capture') {
+    try {
+      const reader = new MediaStreamTrackProcessor({ track: m.track }).readable.getReader();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        postMessage({ frame: value }, [value]);
+      }
+    } catch (err) { postMessage({ error: 'capture: ' + err }); }
+  } else if (m.cmd === 'render-init') {
+    try {
+      const gen = new VideoTrackGenerator();
+      vtgWriter = gen.writable.getWriter();
+      postMessage({ track: gen.track }, [gen.track]);
+    } catch (err) { postMessage({ error: 'vtg: ' + err }); }
+  } else if (m.cmd === 'frame') {
+    vtgWriter.write(m.frame).catch((err) => postMessage({ error: 'vtg write: ' + err }));
+  }
+};`;
+const workerURL = URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }));
+function newWorker() { return new Worker(workerURL); }
+
+// ---------- 1. capabilities ----------
+const videoCodecs = { 'H.264 baseline': 'avc1.42e01f', 'H.264 high': 'avc1.640028', VP8: 'vp8', VP9: 'vp09.00.10.08', AV1: 'av01.0.04M.08' };
+function encoderConfig(codec, width = 1280, height = 720) {
+  const c = { codec, width, height, bitrate: 1_500_000, framerate: 30, latencyMode: 'realtime' };
+  if (codec.startsWith('avc')) c.avc = { format: 'annexb' };
+  return c;
+}
+async function checkCaps() {
+  const c = results.caps;
+  c.WebTransport = typeof WebTransport === 'function';
+  if (c.WebTransport) {
+    for (const p of ['congestionControl', 'getStats', 'protocol', 'reliability', 'datagrams']) c['WebTransport.' + p] = p in WebTransport.prototype;
+  }
+  for (const k of ['VideoEncoder', 'VideoDecoder', 'AudioEncoder', 'AudioDecoder', 'MediaStreamTrackProcessor', 'MediaStreamTrackGenerator', 'VideoTrackGenerator', 'AudioWorkletNode', 'OffscreenCanvas', 'RTCPeerConnection']) {
+    c[k + (k.startsWith('Media') || k === 'VideoTrackGenerator' ? ' (window)' : '')] = typeof self[k] === 'function';
+  }
+  c.requestVideoFrameCallback = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  c.crossOriginIsolated = self.crossOriginIsolated;
+  c.isSecureContext = self.isSecureContext;
+  const w = newWorker();
+  Object.assign(c, await new Promise((res) => { w.onmessage = (e) => res(e.data.caps); w.postMessage({ cmd: 'caps' }); }));
+  w.terminate();
+  for (const [name, codec] of Object.entries(videoCodecs)) {
+    let enc = false, dec = false;
+    try { enc = (await VideoEncoder.isConfigSupported(encoderConfig(codec))).supported; } catch {}
+    try { dec = (await VideoDecoder.isConfigSupported({ codec })).supported; } catch {}
+    c[`encode ${name} 720p realtime`] = enc;
+    c[`decode ${name}`] = dec;
+  }
+  try { c['encode Opus'] = (await AudioEncoder.isConfigSupported({ codec: 'opus', sampleRate: 48000, numberOfChannels: 1, bitrate: 32000 })).supported; } catch { c['encode Opus'] = false; }
+  try { c['decode Opus'] = (await AudioDecoder.isConfigSupported({ codec: 'opus', sampleRate: 48000, numberOfChannels: 1 })).supported; } catch { c['decode Opus'] = false; }
+  $('capsTable').innerHTML = Object.entries(c).map(([k, v]) =>
+    `<tr><td>${k}</td><td class="${v === true ? 'ok' : v === false ? 'bad' : ''}">${v}</td></tr>`).join('');
+  showResults();
+}
+
+// ---------- 2. WebTransport ----------
+// Every message: kind u8 | id u32 | sentAt f64 (performance.now) | payload
+const KIND_PING = 1, KIND_VIDEO = 2, KIND_LONG = 3, KIND_RESET_PROBE = 4;
+const HDR = 13;
+let wt, cfg;
+const pending = new Map(); // `${kind}:${id}` -> resolve(rttMs)
+const uniHandlers = {};
+function msg(kind, id, payload = new Uint8Array(0)) {
+  const b = new Uint8Array(HDR + payload.length);
+  const v = new DataView(b.buffer);
+  v.setUint8(0, kind); v.setUint32(1, id); v.setFloat64(5, performance.now());
+  b.set(payload, HDR);
+  return b;
+}
+function onEcho(bytes) {
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const kind = v.getUint8(0), id = v.getUint32(1), rtt = performance.now() - v.getFloat64(5);
+  if (uniHandlers[kind]) return uniHandlers[kind](bytes, rtt);
+  const key = kind + ':' + id;
+  const r = pending.get(key);
+  if (r) { pending.delete(key); r(rtt); }
+}
+function waitEcho(kind, id, timeoutMs) {
+  return new Promise((res) => {
+    const key = kind + ':' + id;
+    const t = setTimeout(() => { pending.delete(key); res(null); }, timeoutMs);
+    pending.set(key, (rtt) => { clearTimeout(t); res(rtt); });
+  });
+}
+async function readAll(readable) {
+  const reader = readable.getReader();
+  const chunks = []; let len = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(value); len += value.length;
+  }
+  const out = new Uint8Array(len); let o = 0;
+  for (const c of chunks) { out.set(c, o); o += c.length; }
+  return out;
+}
+async function sendUni(bytes, sendOrder) {
+  const s = await wt.createUnidirectionalStream(sendOrder !== undefined ? { sendOrder } : undefined);
+  const w = s.getWriter();
+  await w.write(bytes);
+  await w.close();
+}
+let dgWriter;
+async function connect() {
+  if (wt) return;
+  cfg = await (await fetch('/config.json')).json();
+  const opts = { protocols: ['moqt-22'] };
+  if (cfg.certHash) opts.serverCertificateHashes = [{ algorithm: 'sha-256', value: hexToBytes(cfg.certHash) }];
+  if ('congestionControl' in WebTransport.prototype) opts.congestionControl = 'low-latency';
+  const t0 = performance.now();
+  wt = new WebTransport(cfg.url, opts);
+  try {
+    await wt.ready;
+  } catch (e) {
+    results.wt.connectError = String(e); showResults(); log('wtLog', 'connect failed: ' + e); wt = null; throw e;
+  }
+  results.wt.connectMs = Math.round(performance.now() - t0);
+  results.wt.negotiatedProtocol = 'protocol' in wt ? wt.protocol : '(attribute missing)';
+  results.wt.congestionControl = wt.congestionControl;
+  log('wtLog', `connected to ${cfg.url} in ${results.wt.connectMs} ms, protocol=${results.wt.negotiatedProtocol}, cc=${wt.congestionControl}`);
+  wt.closed.then((i) => { log('wtLog', 'session closed: ' + JSON.stringify(i)); results.wt.closed = i; wt = null; })
+    .catch((e) => { log('wtLog', 'session closed with error: ' + e); results.wt.closedError = String(e); wt = null; });
+  (async () => {
+    const r = wt.incomingUnidirectionalStreams.getReader();
+    for (;;) {
+      const { value, done } = await r.read();
+      if (done) return;
+      readAll(value).then(onEcho).catch((e) => log('wtLog', 'uni read: ' + e));
+    }
+  })().catch((e) => log('wtLog', 'uni accept: ' + e));
+  (async () => {
+    const r = wt.datagrams.readable.getReader();
+    for (;;) {
+      const { value, done } = await r.read();
+      if (done) return;
+      onEcho(value);
+    }
+  })().catch(() => {});
+  dgWriter = wt.datagrams.writable.getWriter();
+  showResults();
+}
+
+// A persistent bidirectional stream used for request/response pings.
+class BidiPinger {
+  constructor(stream) {
+    this.w = stream.writable.getWriter();
+    this.r = stream.readable.getReader();
+    this.buf = new Uint8Array(0);
+  }
+  async readExact(n) {
+    while (this.buf.length < n) {
+      const { value, done } = await this.r.read();
+      if (done) throw new Error('stream ended');
+      const b = new Uint8Array(this.buf.length + value.length);
+      b.set(this.buf); b.set(value, this.buf.length); this.buf = b;
+    }
+    const out = this.buf.slice(0, n); this.buf = this.buf.slice(n);
+    return out;
+  }
+  async ping(id) {
+    await this.w.write(msg(KIND_PING, id));
+    const echo = await this.readExact(HDR);
+    return performance.now() - new DataView(echo.buffer).getFloat64(5);
+  }
+}
+
+async function echoTests() {
+  await connect();
+  const out = {};
+  const skip = new Set((new URLSearchParams(location.search).get('skip') || '').split(','));
+  if (!skip.has('bidi')) {
+  const bidi = new BidiPinger(await wt.createBidirectionalStream());
+  const bidiRtts = [];
+  for (let i = 0; i < 50; i++) bidiRtts.push(await bidi.ping(i));
+  out.bidiRttMs = stats(bidiRtts);
+  }
+  if (!skip.has('uni')) {
+  const uniRtts = []; let uniLost = 0;
+  for (let i = 0; i < 50; i++) {
+    const p = waitEcho(KIND_PING, 1_000_000 + i, 3000);
+    await sendUni(msg(KIND_PING, 1_000_000 + i));
+    const rtt = await p; rtt === null ? uniLost++ : uniRtts.push(rtt);
+  }
+  out.uniRttMs = stats(uniRtts); out.uniLost = uniLost;
+  }
+  if (!skip.has('dgram')) {
+  const dg = [];
+  const dgPromises = [];
+  for (let i = 0; i < 200; i++) {
+    dgPromises.push(waitEcho(KIND_PING, 2_000_000 + i, 3000).then((r) => r !== null && dg.push(r)));
+    await dgWriter.write(msg(KIND_PING, 2_000_000 + i));
+    await sleep(5);
+  }
+  await Promise.all(dgPromises);
+  out.datagramRttMs = stats(dg); out.datagramLossPct = Math.round((200 - dg.length) / 2);
+  }
+  // Server-side stream resets (MoQT delivery timeouts): the session must survive them.
+  for (const variant of skip.has('reset') ? [] : [1, 0]) {
+    await sendUni(msg(KIND_RESET_PROBE, variant, new Uint8Array([variant])));
+    await sleep(300);
+    let alive = false;
+    try {
+      const p = waitEcho(KIND_PING, 3_000_000 + variant, 2000);
+      await sendUni(msg(KIND_PING, 3_000_000 + variant));
+      alive = (await p) !== null;
+    } catch {}
+    out[variant ? 'survivesResetAfterData' : 'survivesResetBeforeData'] = alive;
+    if (!alive) break;
+  }
+  if (!skip.has('sendorder')) out.sendOrderSupported = await (async () => {
+    const s = await wt.createUnidirectionalStream({ sendOrder: 5 });
+    const has = 'sendOrder' in s; s.getWriter().close(); return has;
+  })();
+  results.wt.echo = out;
+  log('wtLog', 'echo: ' + JSON.stringify(out));
+  showResults();
+}
+
+// Opus-sized objects on one stream each, as LOC prescribes for audio.
+async function stressTest() {
+  await connect();
+  const rate = +$('stressRate').value, tracks = +$('stressTracks').value, secs = +$('stressSecs').value;
+  log('wtLog', `stress: ${rate}/s × ${tracks} tracks for ${secs}s …`);
+  const payload = new Uint8Array(120);
+  const rtts = []; let sent = 0, lost = 0, errors = 0; let id = 10_000_000;
+  const waits = [];
+  const t0 = performance.now();
+  const total = rate * secs;
+  for (let n = 0; n < total; n++) {
+    const due = t0 + (n * 1000) / rate;
+    const d = due - performance.now();
+    if (d > 0) await sleep(d);
+    for (let t = 0; t < tracks; t++) {
+      const myId = id++;
+      waits.push(waitEcho(KIND_PING, myId, 5000).then((r) => (r === null ? lost++ : rtts.push(r))));
+      sendUni(msg(KIND_PING, myId, payload)).catch(() => errors++);
+      sent++;
+    }
+  }
+  const sendSecs = (performance.now() - t0) / 1000;
+  await Promise.all(waits);
+  const out = { rate, tracks, secs, sent, lost, errors, achievedRate: Math.round(sent / sendSecs), rttMs: stats(rtts) };
+  results.wt.stress = results.wt.stress || [];
+  results.wt.stress.push(out);
+  log('wtLog', 'stress: ' + JSON.stringify(out));
+  showResults();
+}
+
+// Once a second: a uni-stream ping, a bidi ping and a datagram ping.
+async function longSession() {
+  await connect();
+  const mins = +$('longMins').value;
+  const bidi = new BidiPinger(await wt.createBidirectionalStream());
+  const uni = [], bi = [], dg = [];
+  let uniLost = 0, biStalls = 0, dgLost = 0, closedAt = null;
+  const t0 = performance.now();
+  const end = t0 + mins * 60_000;
+  let i = 0;
+  while (performance.now() < end) {
+    if (!wt) { closedAt = (performance.now() - t0) / 1000; break; }
+    const id = 20_000_000 + i++;
+    const u = waitEcho(KIND_PING, id, 5000).then((r) => (r === null ? uniLost++ : uni.push(r)));
+    sendUni(msg(KIND_PING, id)).catch(() => uniLost++);
+    const d = waitEcho(KIND_PING, id + 5_000_000, 5000).then((r) => (r === null ? dgLost++ : dg.push(r)));
+    dgWriter.write(msg(KIND_PING, id + 5_000_000)).catch(() => {});
+    try {
+      const r = await Promise.race([bidi.ping(id), sleep(5000).then(() => null)]);
+      if (r === null || r > 1000) biStalls++;
+      if (r !== null) bi.push(r);
+    } catch (e) { log('wtLog', 'bidi ping failed: ' + e); closedAt = (performance.now() - t0) / 1000; break; }
+    await Promise.race([Promise.all([u, d]), sleep(1000)]);
+    const el = Math.round((performance.now() - t0) / 1000);
+    $('longStatus').textContent = `${el}s: uni ${stats(uni).p95}ms p95 (${uniLost} lost) · bidi ${stats(bi).p95}ms p95 (${biStalls} stalls) · dgram ${dgLost} lost`;
+    await sleep(Math.max(0, t0 + i * 1000 - performance.now()));
+  }
+  const out = { minutes: mins, survived: closedAt === null, closedAtSec: closedAt, uniRttMs: stats(uni), uniLost, bidiRttMs: stats(bi), bidiStalls: biStalls, datagramRttMs: stats(dg), datagramLost: dgLost };
+  results.wt.longSession = out;
+  log('wtLog', 'long session: ' + JSON.stringify(out));
+  showResults();
+}
+
+// ---------- 3. video loopback ----------
+let videoRun = null;
+async function startVideo() {
+  if (videoRun) return;
+  const codec = $('vcodec').value, viaWT = $('viaWT').checked;
+  if (viaWT) await connect();
+  const run = { stop: false, cleanups: [] };
+  videoRun = run;
+  const st = { captured: 0, encoded: 0, decoded: 0, rendered: 0, bytes: 0, latencies: [], errors: [] };
+  const captureTimes = new Map();
+
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 360, frameRate: 30 } });
+  $('localPreview').srcObject = stream;
+  const track = stream.getVideoTracks()[0];
+  run.cleanups.push(() => stream.getTracks().forEach((t) => t.stop()));
+
+  // renderer
+  const caps = results.caps;
+  let renderMode = $('renderMode').value;
+  if (renderMode === 'auto') renderMode = caps['MediaStreamTrackGenerator (window)'] ? 'mstg' : caps['VideoTrackGenerator (worker)'] || caps['VideoTrackGenerator (window)'] ? 'vtg' : 'canvas';
+  let draw;
+  const slot = $('remoteSlot'); slot.innerHTML = '';
+  if (renderMode === 'mstg') {
+    const gen = new MediaStreamTrackGenerator({ kind: 'video' });
+    const w = gen.writable.getWriter();
+    const v = document.createElement('video'); v.autoplay = v.muted = v.playsInline = true; v.srcObject = new MediaStream([gen]); slot.append(v);
+    draw = (f) => w.write(f).catch((e) => st.errors.push('mstg: ' + e));
+  } else if (renderMode === 'vtg') {
+    if (typeof VideoTrackGenerator === 'function') {
+      const gen = new VideoTrackGenerator();
+      const w = gen.writable.getWriter();
+      const v = document.createElement('video'); v.autoplay = v.muted = v.playsInline = true; v.srcObject = new MediaStream([gen.track]); slot.append(v);
+      draw = (f) => w.write(f).catch((e) => st.errors.push('vtg: ' + e));
+    } else {
+      const rw = newWorker(); run.cleanups.push(() => rw.terminate());
+      const genTrack = await new Promise((res, rej) => { rw.onmessage = (e) => e.data.track ? res(e.data.track) : rej(new Error(e.data.error)); rw.postMessage({ cmd: 'render-init' }); });
+      rw.onmessage = (e) => e.data.error && st.errors.push(e.data.error);
+      const v = document.createElement('video'); v.autoplay = v.muted = v.playsInline = true; v.srcObject = new MediaStream([genTrack]); slot.append(v);
+      draw = (f) => rw.postMessage({ cmd: 'frame', frame: f }, [f]);
+    }
+  } else {
+    const cv = document.createElement('canvas'); cv.width = 640; cv.height = 360; slot.append(cv);
+    const ctx = cv.getContext('2d');
+    draw = (f) => { ctx.drawImage(f, 0, 0, cv.width, cv.height); f.close(); };
+  }
+
+  const decoder = new VideoDecoder({
+    output: (f) => {
+      st.decoded++;
+      const t = captureTimes.get(f.timestamp);
+      if (t !== undefined) { st.latencies.push(performance.now() - t); captureTimes.delete(f.timestamp); }
+      draw(f); st.rendered++;
+    },
+    error: (e) => st.errors.push('decode: ' + e),
+  });
+  decoder.configure({ codec, optimizeForLatency: true });
+  let haveKey = false;
+  const decode = (type, timestamp, data) => {
+    if (!haveKey && type !== 'key') return;
+    haveKey = true;
+    decoder.decode(new EncodedVideoChunk({ type, timestamp, data }));
+  };
+  if (viaWT) {
+    uniHandlers[KIND_VIDEO] = (bytes) => {
+      const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      decode(v.getUint8(HDR) ? 'key' : 'delta', v.getFloat64(HDR + 1), bytes.subarray(HDR + 9));
+    };
+  }
+  let frameId = 0;
+  const encoder = new VideoEncoder({
+    output: (chunk) => {
+      st.encoded++; st.bytes += chunk.byteLength;
+      const data = new Uint8Array(chunk.byteLength); chunk.copyTo(data);
+      if (!viaWT) return decode(chunk.type, chunk.timestamp, data);
+      const p = new Uint8Array(9 + data.length); const v = new DataView(p.buffer);
+      v.setUint8(0, chunk.type === 'key' ? 1 : 0); v.setFloat64(1, chunk.timestamp); p.set(data, 9);
+      sendUni(msg(KIND_VIDEO, frameId++, p), chunk.type === 'key' ? 10 : 5).catch((e) => st.errors.push('send: ' + e));
+    },
+    error: (e) => st.errors.push('encode: ' + e),
+  });
+  encoder.configure(encoderConfig(codec, 640, 360));
+  const onFrame = (frame) => {
+    if (run.stop) { frame.close(); return; }
+    st.captured++;
+    captureTimes.set(frame.timestamp, performance.now());
+    if (encoder.encodeQueueSize < 3) encoder.encode(frame, { keyFrame: st.captured % 60 === 1 });
+    frame.close();
+  };
+
+  // capture
+  let capMode = $('capMode').value;
+  if (capMode === 'auto') capMode = caps['MediaStreamTrackProcessor (window)'] ? 'mstp-window' : caps['MediaStreamTrackProcessor (worker)'] ? 'mstp-worker' : 'rvfc';
+  if (capMode === 'mstp-window') {
+    const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
+    run.cleanups.push(() => reader.cancel());
+    (async () => { for (;;) { const { value, done } = await reader.read(); if (done) return; onFrame(value); } })().catch((e) => st.errors.push('capture: ' + e));
+  } else if (capMode === 'mstp-worker') {
+    const cw = newWorker(); run.cleanups.push(() => cw.terminate());
+    cw.onmessage = (e) => (e.data.frame ? onFrame(e.data.frame) : st.errors.push(e.data.error));
+    try { cw.postMessage({ cmd: 'capture', track }, [track]); } catch (e) { st.errors.push('track transfer: ' + e); }
+  } else {
+    const v = $('localPreview');
+    await v.play().catch(() => {});
+    const step = () => {
+      if (run.stop) return;
+      if (v.videoWidth) onFrame(new VideoFrame(v, { timestamp: Math.round(performance.now() * 1000) }));
+      v.requestVideoFrameCallback(step);
+    };
+    v.requestVideoFrameCallback(step);
+  }
+  run.cleanups.push(() => { try { encoder.close(); } catch {} try { decoder.close(); } catch {} delete uniHandlers[KIND_VIDEO]; });
+
+  const t0 = performance.now();
+  let last = { ...st };
+  run.timer = setInterval(() => {
+    const secs = (performance.now() - t0) / 1000;
+    const lat = stats(st.latencies.slice(-60));
+    $('videoLog').textContent = `codec ${codec} · capture ${capMode} · render ${renderMode} · ${viaWT ? 'via WebTransport' : 'local'}\n` +
+      `fps captured ${st.captured - last.captured} encoded ${st.encoded - last.encoded} decoded ${st.decoded - last.decoded} · ` +
+      `${Math.round((st.bytes * 8) / secs / 1000)} kbps · capture→decoded latency p50 ${lat.p50} ms p95 ${lat.p95} ms\n` +
+      (st.errors.length ? 'errors: ' + st.errors.slice(-5).join('\n') : '');
+    last = { ...st };
+    results.video[`${codec}|${capMode}|${renderMode}|${viaWT ? 'wt' : 'local'}`] = {
+      seconds: Math.round(secs), captured: st.captured, encoded: st.encoded, decoded: st.decoded,
+      avgKbps: Math.round((st.bytes * 8) / secs / 1000), latencyMs: stats(st.latencies), errors: st.errors.slice(0, 5),
+    };
+  }, 1000);
+}
+function stopVideo() {
+  if (!videoRun) return;
+  videoRun.stop = true;
+  clearInterval(videoRun.timer);
+  videoRun.cleanups.forEach((f) => { try { f(); } catch {} });
+  videoRun = null;
+  showResults();
+}
+
+// ---------- 4. echo cancellation ----------
+// Speech-like test signal: band-limited noise gated on/off at syllable rate.
+function makeNoise(ctx) {
+  const len = ctx.sampleRate * 2;
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) {
+    const gate = Math.floor(i / (ctx.sampleRate * 0.18)) % 3 !== 2 ? 1 : 0.05;
+    d[i] = (Math.random() * 2 - 1) * 0.5 * gate;
+  }
+  const src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
+  const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1000; bp.Q.value = 0.7;
+  src.connect(bp);
+  return { src, out: bp };
+}
+async function bandPowerDb(analyser, ms) {
+  const bins = new Float32Array(analyser.frequencyBinCount);
+  const hz = analyser.context.sampleRate / analyser.fftSize;
+  const lo = Math.floor(300 / hz), hi = Math.ceil(3400 / hz);
+  let sum = 0, n = 0;
+  const end = performance.now() + ms;
+  while (performance.now() < end) {
+    analyser.getFloatFrequencyData(bins);
+    let p = 0; for (let i = lo; i <= hi; i++) p += 10 ** (bins[i] / 10);
+    sum += p; n++;
+    await sleep(50);
+  }
+  return Math.round(10 * Math.log10(sum / n) * 10) / 10;
+}
+async function startPath(ctx, path, audioEl, out) {
+  const stops = [];
+  if (path === 'webaudio-destination') {
+    out.connect(ctx.destination); stops.push(() => out.disconnect());
+  } else {
+    const dest = ctx.createMediaStreamDestination(); out.connect(dest); stops.push(() => out.disconnect());
+    let stream = dest.stream;
+    if (path === 'rtcpc-loopback') {
+      const a = new RTCPeerConnection(), b = new RTCPeerConnection();
+      a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate);
+      b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate);
+      const got = new Promise((res) => (b.ontrack = (e) => res(e.streams[0] || new MediaStream([e.track]))));
+      dest.stream.getTracks().forEach((t) => a.addTrack(t, dest.stream));
+      await a.setLocalDescription(); await b.setRemoteDescription(a.localDescription);
+      await b.setLocalDescription(); await a.setRemoteDescription(b.localDescription);
+      stream = await got;
+      stops.push(() => { a.close(); b.close(); });
+    }
+    audioEl.srcObject = stream; await audioEl.play();
+    stops.push(() => { audioEl.pause(); audioEl.srcObject = null; });
+  }
+  return () => stops.forEach((f) => f());
+}
+async function aecTest() {
+  const ctx = new AudioContext();
+  await ctx.resume();
+  const audioEl = new Audio(); audioEl.autoplay = true;
+  const out = {};
+  const paths = ['webaudio-destination', 'mediastream-audio-element', 'rtcpc-loopback'];
+  for (const ec of [false, true]) {
+    const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: ec, noiseSuppression: false, autoGainControl: false } });
+    const an = ctx.createAnalyser(); an.fftSize = 2048; an.smoothingTimeConstant = 0;
+    const micSrc = ctx.createMediaStreamSource(mic); micSrc.connect(an);
+    out[`silence ec=${ec}`] = await bandPowerDb(an, 1500);
+    log('aecLog', `silence ec=${ec}: ${out[`silence ec=${ec}`]} dB`);
+    for (const path of paths) {
+      const { src, out: sig } = makeNoise(ctx); src.start();
+      const stop = await startPath(ctx, path, audioEl, sig);
+      await sleep(2500); // let the canceller converge
+      const db = await bandPowerDb(an, 2500);
+      stop(); src.stop();
+      out[`${path} ec=${ec}`] = db;
+      log('aecLog', `${path} ec=${ec}: ${db} dB`);
+      await sleep(800);
+    }
+    micSrc.disconnect(); mic.getTracks().forEach((t) => t.stop());
+  }
+  for (const path of paths) {
+    out[`${path} cancelled dB`] = Math.round((out[`${path} ec=false`] - out[`${path} ec=true`]) * 10) / 10;
+    log('aecLog', `→ ${path}: echo reduced by ${out[`${path} cancelled dB`]} dB with echoCancellation`);
+  }
+  log('aecLog', 'A path is fine if it is reduced roughly as much as the others and ends near the silence level.');
+  results.aec = out;
+  ctx.close();
+  showResults();
+}
+
+// ---------- report ----------
+async function sendReport() {
+  await fetch('/report', { method: 'POST', body: JSON.stringify(results) });
+}
+const guard = (logId, fn) => async () => { try { await fn(); } catch (e) { log(logId, 'error: ' + (e && e.stack || e)); } };
+$('btnConnect').onclick = guard('wtLog', connect);
+$('btnEcho').onclick = guard('wtLog', echoTests);
+$('btnStress').onclick = guard('wtLog', stressTest);
+$('btnLong').onclick = guard('wtLog', longSession);
+$('btnVideo').onclick = guard('videoLog', startVideo);
+$('btnVideoStop').onclick = stopVideo;
+$('btnAec').onclick = guard('aecLog', aecTest);
+$('btnReport').onclick = guard('wtLog', sendReport);
+$('btnCopy').onclick = () => navigator.clipboard.writeText(JSON.stringify(results, null, 2));
+
+// ?auto=echo,stress,video&secs=10 runs checks unattended and posts the report (used for headless runs).
+(async () => {
+  await checkCaps().catch((e) => log('wtLog', 'caps: ' + e));
+  const q = new URLSearchParams(location.search);
+  const auto = (q.get('auto') || '').split(',').filter(Boolean);
+  if (!auto.length) return;
+  if (q.get('secs')) { $('stressSecs').value = q.get('secs'); $('longMins').value = +q.get('secs') / 60; }
+  if (q.get('tracks')) $('stressTracks').value = q.get('tracks');
+  const codecs = q.get('codecs') ? q.get('codecs').split(',') : [$('vcodec').value];
+  for (const step of auto) {
+    try {
+      if (step === 'echo') await echoTests();
+      if (step === 'stress') await stressTest();
+      if (step === 'long') await longSession();
+      if (step === 'video' || step === 'video-local') {
+        $('viaWT').checked = step === 'video';
+        for (const codec of codecs) {
+          $('vcodec').value = codec;
+          await startVideo(); await sleep((+q.get('secs') || 10) * 1000); stopVideo();
+        }
+      }
+    } catch (e) { results[`autoError ${step}`] = String(e && e.stack || e); }
+  }
+  await sendReport();
+  if (q.get('close')) window.close();
+})();
+</script>
+</body>
+</html>

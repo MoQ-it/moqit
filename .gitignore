@@ -1,0 +1,5 @@
+.cache/
+go.work
+go.work.sum
+# Firefox profiles made by browser tests and probes
+.ff-profile-*
