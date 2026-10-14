@@ -45,7 +45,11 @@ type Config struct {
 	Keys    auth.KeyProvider
 	// Certificate for QUIC. SelfSignedCert makes one that browsers accept
 	// through serverCertificateHashes.
-	Certificate      tls.Certificate
+	Certificate tls.Certificate
+	// CertFile and KeyFile, if set, are used instead of Certificate and
+	// re-read when they change, so a renewed certificate needs no restart.
+	CertFile, KeyFile string
+
 	DepartureTimeout time.Duration
 	MaxParticipants  int
 	Logger           *slog.Logger
@@ -69,7 +73,7 @@ type Server struct {
 	Manager *room.Manager
 	// Addr is the UDP address actually bound.
 	Addr net.Addr
-	// CertHash is the SHA-256 of the certificate, for serverCertificateHashes.
+	// CertHash is the SHA-256 of the certificate at start, for serverCertificateHashes.
 	CertHash [32]byte
 
 	publicURL      string
@@ -81,7 +85,6 @@ type Server struct {
 	cancel         context.CancelFunc
 }
 
-// Start starts a node; it runs until Close or ctx ends.
 // A client that vanishes without closing (crashed tab, lost network) is
 // dropped after idleTimeout of silence; keep-alives stop a quiet but live
 // connection from reaching it. (quic-go's default is 30 s.)
@@ -90,6 +93,7 @@ const (
 	keepAlive   = 5 * time.Second
 )
 
+// Start starts a node; it runs until Close or ctx ends.
 func Start(ctx context.Context, cfg Config) (*Server, error) {
 	if len(cfg.Keys) == 0 {
 		return nil, errors.New("server: no API keys")
@@ -103,9 +107,20 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		serverKey = k
 		break
 	}
+	var certs *certSource
+	switch {
+	case cfg.CertFile != "":
+		var err error
+		if certs, err = fileCert(cfg.CertFile, cfg.KeyFile); err != nil {
+			return nil, err
+		}
+	case len(cfg.Certificate.Certificate) > 0:
+		certs = fixedCert(cfg.Certificate)
+	default:
+		return nil, errors.New("server: no certificate")
+	}
+	certHash := certs.sum()
 	ctx, cancel := context.WithCancel(ctx)
-	cert := cfg.Certificate
-	certHash := sha256.Sum256(cert.Certificate[0])
 	m := room.New(room.Config{
 		Keys: cfg.Keys, ServerKey: serverKey, DepartureTimeout: cfg.DepartureTimeout, MaxParticipants: cfg.MaxParticipants, Logger: log,
 		Cluster:  cfg.Cluster,
@@ -114,7 +129,7 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		DialPeer: dialPeer,
 	})
 
-	tlsConf := &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{v22.ALPN, http3.NextProtoH3}}
+	tlsConf := &tls.Config{GetCertificate: certs.get, NextProtos: []string{v22.ALPN, http3.NextProtoH3}}
 	qconf := &quic.Config{
 		EnableDatagrams:                  true,
 		EnableStreamResetPartialDelivery: true,
@@ -170,13 +185,15 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	// certificate.
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
 	err = m.Start(ctx, func(ctx context.Context) (moqt.Conn, error) {
-		return dialPeer(ctx, net.JoinHostPort("127.0.0.1", port), hex.EncodeToString(certHash[:]))
+		h := certs.sum()
+		return dialPeer(ctx, net.JoinHostPort("127.0.0.1", port), hex.EncodeToString(h[:]))
 	})
 	if err != nil {
 		ln.Close()
 		cancel()
 		return nil, err
 	}
+	go certs.watch(ctx, log, func(h [32]byte) { m.SetCertSHA256(hex.EncodeToString(h[:])) })
 	return &Server{Manager: m, Addr: ln.Addr(), CertHash: certHash, publicURL: cfg.PublicURL, exposeCertHash: cfg.ExposeCertHash, cluster: cfg.Cluster, keys: cfg.Keys, ln: ln, wts: wts, cancel: cancel}, nil
 }
 

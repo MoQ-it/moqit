@@ -78,11 +78,15 @@ func run(log *slog.Logger, dev bool, udpAddr, httpAddr, keysFlag, certFile, keyF
 		return errors.New("no API keys: pass -keys key:secret or -dev")
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var cert tls.Certificate
 	var err error
 	switch {
 	case certFile != "":
-		cert, err = tls.LoadX509KeyPair(certFile, keyFile)
+		// The certificate may still be on its way (an ACME client's first run).
+		err = waitForFiles(ctx, log, certFile, keyFile)
 	case dev:
 		cert, err = server.SelfSignedCert(hosts)
 	default:
@@ -92,9 +96,7 @@ func run(log *slog.Logger, dev bool, udpAddr, httpAddr, keysFlag, certFile, keyF
 		return err
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	cfg := server.Config{UDPAddr: udpAddr, Keys: keys, Certificate: cert, DepartureTimeout: departure, Logger: log,
+	cfg := server.Config{UDPAddr: udpAddr, Keys: keys, Certificate: cert, CertFile: certFile, KeyFile: keyFile, DepartureTimeout: departure, Logger: log,
 		AdvertiseAddr: clusterCfg.advertise, PublicURL: clusterCfg.publicURL, Region: clusterCfg.region, ExposeCertHash: dev}
 	if clusterCfg.redis != "" {
 		opts, err := redis.ParseURL(clusterCfg.redis)
@@ -192,4 +194,28 @@ func hostOf(r *http.Request) string {
 		return r.Host
 	}
 	return host
+}
+
+func waitForFiles(ctx context.Context, log *slog.Logger, files ...string) error {
+	for logged := false; ; {
+		missing := ""
+		for _, f := range files {
+			if _, err := os.Stat(f); err != nil {
+				missing = f
+				break
+			}
+		}
+		if missing == "" {
+			return nil
+		}
+		if !logged {
+			log.Info("waiting for certificate", "file", missing)
+			logged = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }

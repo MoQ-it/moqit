@@ -1,0 +1,72 @@
+# moqit Meet on the internet: Caddy (HTTPS and the certificate), one moqit
+# node, and the Meet app. See docs/deploy.md.
+#
+#   cp .env.example .env       # set MEET_DOMAIN and MOQIT_API_SECRET
+#   docker compose up -d --build
+#
+# Open TCP 80 and 443 and UDP 4443. The build context is the directory
+# holding both moqit/ and moqt/.
+
+name: moqit-meet
+
+x-build: &build
+  context: ../../..
+  dockerfile: moqit/deploy/Dockerfile
+
+services:
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      MEET_DOMAIN: ${MEET_DOMAIN:?set MEET_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+  # WebTransport cannot go through Caddy, so the node is reached directly on
+  # UDP, with the certificate Caddy obtains for MEET_DOMAIN. It re-reads the
+  # certificate when Caddy renews it.
+  moqit:
+    image: moqit
+    build: *build
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/moqit-server"]
+    command:
+      - -udp=:4443
+      - -http=:7880
+      - -cert=/caddy/caddy/certificates/${CERT_ISSUER:-acme-v02.api.letsencrypt.org-directory}/${MEET_DOMAIN}/${MEET_DOMAIN}.crt
+      - -key=/caddy/caddy/certificates/${CERT_ISSUER:-acme-v02.api.letsencrypt.org-directory}/${MEET_DOMAIN}/${MEET_DOMAIN}.key
+    environment:
+      MOQIT_KEYS: ${MOQIT_API_KEY:-meet}:${MOQIT_API_SECRET:?set MOQIT_API_SECRET in .env}
+    ports:
+      - "${MOQ_PORT:-4443}:4443/udp"
+    volumes:
+      - caddy-data:/caddy:ro
+    # Caddy's private keys are readable by root only: the node runs as root,
+    # but with no capabilities, no privilege escalation and a read-only filesystem.
+    user: "0:0"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+
+  meet:
+    image: moqit
+    build: *build
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/meet"]
+    command:
+      - -addr=:8080
+      - -static=/srv/meet
+      - -node-url=https://${MEET_DOMAIN}:${MOQ_PORT:-4443}/moq
+    environment:
+      MOQIT_API_KEY: ${MOQIT_API_KEY:-meet}
+      MOQIT_API_SECRET: ${MOQIT_API_SECRET}
+    depends_on: [moqit]
+
+volumes:
+  caddy-data:
+  caddy-config:

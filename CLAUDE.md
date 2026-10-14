@@ -10,7 +10,7 @@ moqit depends on the sibling repository `../moqt` (MoQ transport library, Go + T
 
 3. **Keep the MoQT codec in step** — If the wire codec in `../moqt/wire/v22` changed, update the shared golden vectors in `../moqt/testdata/v22/` and the TS codec in `../moqt/ts` to match; both test suites read the same vectors.
 
-4. **Update the docs** — `README.md` is the public landing page; reference detail lives in `docs/` (`meet.md`, `browser-sdk.md`, `server.md`, `clustering.md`, `protocol.md`, `development.md`). If SDK APIs (`@moqit/client`, `@moqit/react`, `sdk/go`), the RoomService API, tokens, webhooks, command-line flags (`cmd/moqit-server`, `cmd/meet`, `cmd/moqit`), the MoQ namespace/track layout or Meet features changed, update the matching `docs/` page, with a usage example for new API.
+4. **Update the docs** — `README.md` is the public landing page; reference detail lives in `docs/` (`meet.md`, `browser-sdk.md`, `server.md`, `deploy.md`, `clustering.md`, `protocol.md`, `development.md`). If SDK APIs (`@moqit/client`, `@moqit/react`, `sdk/go`), the RoomService API, tokens, webhooks, command-line flags (`cmd/moqit-server`, `cmd/meet`, `cmd/moqit`), the MoQ namespace/track layout or Meet features changed, update the matching `docs/` page, with a usage example for new API.
    - Keep `README.md` a landing page, under about **200 lines** (`wc -l README.md`). A new feature gets at most **one line** in its Features list — no flags, endpoints or caveats; those go in `docs/`.
    - Only claim what is tested; mark anything unverified (e.g. Safari, Docker) as such.
 

@@ -1,0 +1,11 @@
+{
+	# Plain HTTPS only: UDP is the moqit node's.
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$MEET_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy meet:8080
+}

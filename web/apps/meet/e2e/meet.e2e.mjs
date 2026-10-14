@@ -12,7 +12,12 @@ const repo = resolve(import.meta.dirname, "../../../..");
 const shots = process.env.SCREENSHOTS ?? mkdtempSync(join(tmpdir(), "meet-e2e-"));
 const port = 20000 + Math.floor(Math.random() * 20000);
 // MEET_URL tests an already-running deployment instead of `meet -dev`.
+// For one with a locally trusted certificate (see docs/deploy.md), set
+// MEET_INSECURE=1, CHROME_HOME to a home whose NSS database trusts its root,
+// and CHROME_ARGS=--webtransport-developer-mode.
 const base = process.env.MEET_URL ?? `http://localhost:${port}`;
+const insecure = !!process.env.MEET_INSECURE;
+if (insecure) process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 function log(msg) {
   console.log(`${new Date().toISOString().slice(11, 23)} ${msg}`);
@@ -30,11 +35,13 @@ async function main() {
   try {
     await waitFor(async () => (await fetch(`${base}/healthz`).catch(() => null))?.ok, "meet to start");
     const browser = await chromium.launch({
+      env: process.env.CHROME_HOME ? { ...process.env, HOME: process.env.CHROME_HOME } : undefined,
       executablePath: process.env.CHROME ?? "/usr/bin/google-chrome",
       headless: true,
       args: [
         "--use-fake-device-for-media-stream=device-count=2", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required",
         "--auto-select-desktop-capture-source=Entire screen", // getDisplayMedia picks the (fake) screen
+        ...(process.env.CHROME_ARGS?.split(" ").filter(Boolean) ?? []),
       ],
     });
     try {
@@ -61,7 +68,7 @@ async function waitFor(f, what, timeoutMs = 15000) {
 }
 
 async function join_(browser, url, name, viaHome) {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: insecure });
   const page = await ctx.newPage();
   if (name === "Alice") await page.addInitScript(fakeScreen);
   // Bob has a setting saved by an older version (stats were off by default

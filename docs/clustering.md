@@ -16,4 +16,4 @@ moqit-server -redis redis://redis:6379/0 -node-id node1 -advertise 10.0.0.1:4443
 - **Identities:** with the same identity on two nodes, the newer session wins.
 - **Routing:** `GET /v1/route?token=…` on any node's HTTP port returns the node already hosting the token's room, otherwise the least loaded. `meet -route-url` uses it.
 - **Development clusters:** with `-dev`, routing also returns the node's self-signed certificate hash.
-- **Docker:** `deploy/docker-compose.yml` runs Redis, two nodes and Meet. It is experimental and not yet verified.
+- **Docker:** `deploy/docker-compose.yml` runs Redis, two nodes and Meet for development, with self-signed certificates. It is experimental and not yet verified. For a single node on the internet, see [deploy.md](deploy.md).

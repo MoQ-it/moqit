@@ -107,8 +107,9 @@ type Manager struct {
 	peerMu sync.Mutex
 	peers  map[string]*peerSession // by node ID
 
-	mu    sync.Mutex
-	rooms map[string]*Room
+	mu         sync.Mutex
+	certSHA256 string // renewed certificate; overrides cfg.Node's
+	rooms      map[string]*Room
 }
 
 // New creates a Manager and the relay it authorizes. Serve every incoming
@@ -186,9 +187,20 @@ func (m *Manager) tokenOption() v22.KeyValues {
 	return v22.KeyValues{{Type: v22.OptAuthorizationToken, Bytes: tok.Append(nil)}}
 }
 
+// SetCertSHA256 updates the certificate hash this node advertises to the
+// cluster, after its certificate is renewed.
+func (m *Manager) SetCertSHA256(hash string) {
+	m.mu.Lock()
+	m.certSHA256 = hash
+	m.mu.Unlock()
+}
+
 func (m *Manager) nodeInfo() cluster.NodeInfo {
 	info := m.cfg.Node
 	m.mu.Lock()
+	if m.certSHA256 != "" {
+		info.CertSHA256 = m.certSHA256
+	}
 	for _, r := range m.rooms {
 		r.mu.Lock()
 		info.Participants += len(r.participants)

@@ -104,7 +104,9 @@ go run ./cmd/moqit-server -dev                       # try it locally
 moqit-server -keys key:secret -cert cert.pem -key key.pem -webhook https://app.example.com/hook
 ```
 
-A node listens on one UDP port (WebTransport at `/moq`, plus raw QUIC for other nodes) and an HTTP port for the API. Add `-redis` to join a cluster — see [docs/clustering.md](docs/clustering.md). `deploy/` has an experimental Dockerfile and Compose file (Redis, two nodes and Meet).
+A node listens on one UDP port (WebTransport at `/moq`, plus raw QUIC for other nodes) and an HTTP port for the API. Add `-redis` to join a cluster — see [docs/clustering.md](docs/clustering.md).
+
+**Put Meet on the internet** with Docker Compose: Caddy obtains a Let's Encrypt certificate, and the node, which re-reads it on renewal, serves media on UDP. See [docs/deploy.md](docs/deploy.md).
 
 ## Browser support
 
@@ -121,6 +123,7 @@ WebTransport is required; there is no WebSocket fallback.
 - [Meet](docs/meet.md) — the conferencing app and its features
 - [Browser SDK](docs/browser-sdk.md) — `@moqit/client` and `@moqit/react`
 - [Server, API and webhooks](docs/server.md) — running a node, tokens, `RoomService`, webhooks
+- [Deploying Meet](docs/deploy.md) — Docker Compose with HTTPS, on your own server
 - [Clustering](docs/clustering.md) — multi-node rooms, routing, Redis
 - [How a room works over MoQ](docs/protocol.md) — namespaces, tracks and authorization
 - [Development](docs/development.md) — building, tests and code generation

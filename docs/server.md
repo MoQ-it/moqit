@@ -13,7 +13,7 @@ go run ./cmd/moqit token -room demo -identity bob -sources microphone
 - creates a self-signed 13-day certificate and logs its SHA-256, for WebTransport `serverCertificateHashes`;
 - enables `/v1/dev/token`.
 
-In production, pass `-keys key:secret` and `-cert`/`-key`. Run `moqit-server -h` for all flags.
+In production, pass `-keys key:secret` and `-cert`/`-key`. The certificate files are re-read when they change, so a renewed certificate (e.g. from an ACME client) needs no restart; until they exist the server waits for them. Run `moqit-server -h` for all flags.
 
 ## Access tokens
 
