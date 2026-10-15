@@ -51,15 +51,7 @@ Open http://localhost:8080, start a meeting, and open the copied link in a secon
 
 ## How it works
 
-```
- Browser (@moqit/client)                         Your backend
-   │  1. get a token  ────────────────────────►  mints a JWT (Go SDK or `moqit token`)
-   │  2. WebTransport, MoQ draft-22
-   ▼
- moqit-server node A  ◄═══ MoQ over QUIC ═══►  node B  ◄──  other browsers
-   relay · rooms · auth · API · webhooks           │
-   └───────────────── Redis (cluster state) ───────┘
-```
+![moqit architecture: browsers and Go clients connect to a node over MoQ; nodes relay to each other and to tiered edges serving viewers; Redis holds cluster state; your backend mints tokens, calls the API and receives webhooks](docs/architecture.svg)
 
 Every participant publishes its media as MoQ tracks under its own namespace (`moqit/<room>/p/<identity>`), one track per simulcast layer. The server publishes room state on a `room` track and private replies on each participant's `inbox`; participants send requests on a `signal` track only the server may read. Subscribing to someone's camera is just a MoQ SUBSCRIBE — the relay fetches it once, from whichever node the publisher is on, and fans it out. See [docs/protocol.md](docs/protocol.md).
 
