@@ -56,11 +56,14 @@ await room.switchActiveDevice("audiooutput", speakerId);       // Chromium and F
 
 ```ts
 await room.localParticipant.setCameraResolution("1080p"); // largest layer sent; applies live
-await room.setVideoQuality("low");                         // every remote video at its lowest layer; undefined = by size
+await room.setVideoQuality("low");                         // every remote video at its smallest layer; undefined = by size
 room.getStats();                                           // { sendBitrate, receiveBitrate } in bits/s
 localVideoTrack.sending();                                 // [{ rendition, width, height, bitrate }] per layer sent
 remoteVideoTrack.bitrate;                                  // also width, height; publication.currentRendition
+remoteAudioTrack.channels;                                 // 2 for stereo, e.g. from the RTMP ingress
 ```
+
+`high`, `medium` and `low` pick the largest, middle and smallest of however many layers a track has: three for a browser's camera, any number from the [RTMP ingress](https://github.com/MoQ-it/moqit-ingress).
 
 ## Processors (effects)
 
@@ -83,7 +86,7 @@ await room.localParticipant.setProcessor(TrackSource.CAMERA, blur); // kept when
 **Subscribing:**
 - **Joining a track:** subscribers start at the current group and ask for a fresh keyframe. Switching rendition drops the old one once the new one delivers.
 - **Video rendering:** `MediaStreamTrackGenerator` into a `<video>` element where available, canvas elsewhere.
-- **Audio playout:** a jitter-buffer AudioWorklet (60 ms target, 200 ms cap) mixed into one `<audio>` element.
+- **Audio playout:** a jitter-buffer AudioWorklet (60 ms target, 200 ms cap) mixed into one `<audio>` element. Stereo tracks (`TrackInfo.channels` 2) play in stereo, mono on both channels.
 
 **Quality:**
 - **Adaptive stream** (`adaptiveStream`, on by default):

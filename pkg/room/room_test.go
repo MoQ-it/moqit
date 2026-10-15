@@ -430,6 +430,15 @@ func TestTokensAndSources(t *testing.T) {
 	if r := carol.send(micTracks()); r.Result != moqitv1.RequestResult_REQUEST_RESULT_OK {
 		t.Errorf("microphone: %v", r)
 	}
+	mic := micTracks()
+	mic.GetSetTracks().Tracks[0].Channels = 2
+	if r := carol.send(mic); r.Result != moqitv1.RequestResult_REQUEST_RESULT_OK {
+		t.Errorf("stereo microphone: %v", r)
+	}
+	mic.GetSetTracks().Tracks[0].Channels = 6
+	if r := carol.send(mic); r.Result != moqitv1.RequestResult_REQUEST_RESULT_NOT_ALLOWED {
+		t.Errorf("6-channel microphone: %v", r)
+	}
 
 	// The room holds one participant; a second is turned away.
 	expectRejected(t, "room full", n, token(t, "dave", auth.RoomGrant{}))

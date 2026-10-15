@@ -158,6 +158,9 @@ func (p *Participant) setTracks(tracks []*moqitv1.TrackInfo) error {
 		if len(t.Renditions) == 0 {
 			return fmt.Errorf("track %q has no renditions", t.Name)
 		}
+		if t.Channels > 2 {
+			return fmt.Errorf("track %q has %d channels; at most 2 are supported", t.Name, t.Channels)
+		}
 		for _, rd := range t.Renditions {
 			class, src := classifyTrack(rd.TrackName)
 			if class != classMedia || src != t.Source {

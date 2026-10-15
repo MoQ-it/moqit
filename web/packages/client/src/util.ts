@@ -130,6 +130,16 @@ export const ScreenRenditions: RenditionSpec[] = [
 
 export type VideoQuality = "high" | "medium" | "low";
 
+/**
+ * The rendition index (largest first) a quality selects among n: high is
+ * the largest, low the smallest and medium the middle one, rounding down
+ * in size.
+ */
+export function qualityIndex(q: VideoQuality, n: number): number {
+  if (n <= 1) return 0;
+  return q === "high" ? 0 : q === "low" ? n - 1 : Math.ceil((n - 1) / 2);
+}
+
 export function videoEncoderConfig(codec: string, width: number, height: number, bitrate: number, framerate: number): VideoEncoderConfig {
   const c: VideoEncoderConfig = { codec, width, height, bitrate, framerate, latencyMode: "realtime" };
   // Annex B keeps SPS/PPS in-band on keyframes, so decoders need no description.

@@ -490,6 +490,7 @@ type TrackInfo struct {
 	Muted         bool                   `protobuf:"varint,5,opt,name=muted,proto3" json:"muted,omitempty"`
 	Codec         string                 `protobuf:"bytes,6,opt,name=codec,proto3" json:"codec,omitempty"` // WebCodecs codec string, e.g. "avc1.42e01f", "opus"
 	Renditions    []*Rendition           `protobuf:"bytes,7,rep,name=renditions,proto3" json:"renditions,omitempty"`
+	Channels      uint32                 `protobuf:"varint,8,opt,name=channels,proto3" json:"channels,omitempty"` // audio channels, 1 or 2; 0 means 1
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -571,6 +572,13 @@ func (x *TrackInfo) GetRenditions() []*Rendition {
 		return x.Renditions
 	}
 	return nil
+}
+
+func (x *TrackInfo) GetChannels() uint32 {
+	if x != nil {
+		return x.Channels
+	}
+	return 0
 }
 
 type ParticipantPermission struct {
@@ -848,7 +856,7 @@ const file_moqit_v1_models_proto_rawDesc = "" +
 	"\x05width\x18\x02 \x01(\rR\x05width\x12\x16\n" +
 	"\x06height\x18\x03 \x01(\rR\x06height\x12\x18\n" +
 	"\abitrate\x18\x04 \x01(\rR\abitrate\x12\x1c\n" +
-	"\tframerate\x18\x05 \x01(\rR\tframerate\"\xea\x01\n" +
+	"\tframerate\x18\x05 \x01(\rR\tframerate\"\x86\x02\n" +
 	"\tTrackInfo\x12\x10\n" +
 	"\x03sid\x18\x01 \x01(\tR\x03sid\x12'\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x13.moqit.v1.TrackKindR\x04kind\x12-\n" +
@@ -858,7 +866,8 @@ const file_moqit_v1_models_proto_rawDesc = "" +
 	"\x05codec\x18\x06 \x01(\tR\x05codec\x123\n" +
 	"\n" +
 	"renditions\x18\a \x03(\v2\x13.moqit.v1.RenditionR\n" +
-	"renditions\"\x96\x02\n" +
+	"renditions\x12\x1a\n" +
+	"\bchannels\x18\b \x01(\rR\bchannels\"\x96\x02\n" +
 	"\x15ParticipantPermission\x12#\n" +
 	"\rcan_subscribe\x18\x01 \x01(\bR\fcanSubscribe\x12\x1f\n" +
 	"\vcan_publish\x18\x02 \x01(\bR\n" +

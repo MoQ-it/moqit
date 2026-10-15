@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { CameraRenditions, codecForRenditions, Emitter, jwtClaims, participantNamespace, RateMeter, retryDelay, ScreenRenditions, Serial } from "./util.ts";
+import { CameraRenditions, codecForRenditions, Emitter, jwtClaims, participantNamespace, qualityIndex, RateMeter, retryDelay, ScreenRenditions, Serial } from "./util.ts";
 
 test("emitter on/once/off/next", async () => {
   class E extends Emitter<{ ping: [number] }> {
@@ -80,4 +80,14 @@ test("retry delays double, are capped and jittered", () => {
   expect(retryDelay(3, () => 1)).toBe(4000);
   expect(retryDelay(10, () => 1)).toBe(10000);
   expect(retryDelay(10, () => 0)).toBe(5000);
+});
+
+test("quality picks among any number of renditions", () => {
+  const pick = (n: number) => (["high", "medium", "low"] as const).map((q) => qualityIndex(q, n));
+  expect(pick(1)).toEqual([0, 0, 0]);
+  expect(pick(2)).toEqual([0, 1, 1]); // screen-h, screen-l
+  expect(pick(3)).toEqual([0, 1, 2]); // camera-h, camera-m, camera-l
+  expect(pick(4)).toEqual([0, 2, 3]);
+  expect(pick(5)).toEqual([0, 2, 4]);
+  expect(pick(0)).toEqual([0, 0, 0]);
 });

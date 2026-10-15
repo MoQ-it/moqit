@@ -4,7 +4,7 @@
 
 moqit is a self-hostable platform for rooms with live audio, video, screen sharing and data, in the style of [LiveKit](https://livekit.io) — but built on the IETF's [Media over QUIC](https://datatracker.ietf.org/wg/moq/about/) (MoQ) instead of WebRTC. Browsers connect over WebTransport; a Go server relays tracks between participants, and nodes relay to each other the same way to form a cluster.
 
-It comes with a browser SDK, React components, a server API with webhooks, a Go server SDK, and **Meet**, a ready-to-run conferencing web app.
+It comes with a browser SDK, React components, a server API with webhooks, a Go SDK, and **Meet**, a ready-to-run conferencing web app.
 
 > **Status: experimental.** moqit implements MoQ Transport draft-22, which is still changing. It works in Chromium and Firefox and is tested end to end in both, but is not yet verified on Safari and has not been tested over real-world lossy networks or at scale. Expect breaking changes.
 
@@ -27,9 +27,11 @@ It comes with a browser SDK, React components, a server API with webhooks, a Go 
 - **Device switching** of microphone, camera and speaker without republishing
 - **Track processors** for effects such as background blur and noise removal
 - **Server API** (Connect: JSON, protobuf or gRPC) and signed **webhooks**
+- **Go participant client** to join rooms and publish media from Go services
 - **Clustering** — a room can span nodes; Redis for state, MoQ between nodes
 - **Edge nodes** — read-only viewers served from edges for large audiences, with a load generator
 - **Meet** — a complete conferencing app with chat, presenting, effects, devices and stats
+- **RTMP ingress** — stream from OBS into a room, transcoded into quality layers and stereo Opus ([moqit-ingress](https://github.com/MoQ-it/moqit-ingress))
 
 ## Quick start
 
@@ -123,7 +125,7 @@ WebTransport is required; there is no WebSocket fallback.
 
 - [Meet](docs/meet.md) — the conferencing app and its features
 - [Browser SDK](docs/browser-sdk.md) — `@moqit/client` and `@moqit/react`
-- [Server, API and webhooks](docs/server.md) — running a node, tokens, `RoomService`, webhooks
+- [Server, API and webhooks](docs/server.md) — running a node, tokens, `RoomService`, webhooks, joining from Go
 - [Deploying Meet](docs/deploy.md) — Docker Compose with HTTPS, on your own server
 - [Clustering](docs/clustering.md) — multi-node rooms, routing, Redis
 - [How a room works over MoQ](docs/protocol.md) — namespaces, tracks and authorization
@@ -137,7 +139,7 @@ WebTransport is required; there is no WebSocket fallback.
 | `cmd/meet` | the Meet app's backend: serves the web app and mints tokens |
 | `cmd/moqit` | CLI (`moqit token`) |
 | `pkg/` | rooms, auth, cluster, server and webhook packages |
-| `sdk/go` | Go server SDK |
+| `sdk/go` | Go server SDK; `sdk/go/client` joins rooms as a participant |
 | `proto/moqit/v1` | protocol and API definitions |
 | `web/packages/client`, `web/packages/react` | browser SDK and React components |
 | `web/apps/meet` | the Meet web app |

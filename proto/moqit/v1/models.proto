@@ -50,6 +50,7 @@ message TrackInfo {
   bool muted = 5;
   string codec = 6; // WebCodecs codec string, e.g. "avc1.42e01f", "opus"
   repeated Rendition renditions = 7;
+  uint32 channels = 8; // audio channels, 1 or 2; 0 means 1
 }
 
 message ParticipantPermission {

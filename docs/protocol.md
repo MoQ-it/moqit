@@ -12,6 +12,8 @@ moqit speaks [MoQ Transport draft-22](https://datatracker.ietf.org/doc/draft-iet
 
 Messages are defined in `proto/moqit/v1`.
 
+A participant declares its tracks in `SetTracks`. Each `TrackInfo` lists its renditions, largest first, and their MoQ track names. A camera may have any number of renditions named `camera-<anything>`: browsers use `camera-h|m|l`, the [RTMP ingress](https://github.com/MoQ-it/moqit-ingress) `camera-<height>`. For audio, `TrackInfo.channels` is 2 for stereo; 0 or 1 is mono.
+
 ## Joining
 
 1. Connect with the token, either in the SETUP AUTHORIZATION TOKEN option or as `?token=` in the WebTransport URL.

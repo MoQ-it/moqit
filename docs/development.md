@@ -41,6 +41,7 @@ go test -tags browser ./test/e2e                     # SDK in headless Chrome an
   - viewers (permissions, the viewer cap, viewer counts);
   - edge nodes, including the room and a publisher moving to another node;
   - cascaded edges, including failover when a tier 1 edge goes away.
+- `sdk/go/client` joins a real node as a participant: declaring tracks, a subscriber starting from the cached keyframe, audio levels, `MuteTrack`, `RemoveParticipant` and leaving.
 - `test/e2e` runs two participants and a viewer in real browsers (fake devices) against a real node, on a single node and across two clustered nodes with the viewer on an edge. It covers join, camera and mic, lip sync, quality switching, pausing hidden video, data, server-side mute, metadata and leave, plus the viewer receiving video and audio without being a participant. On localhost, capture-to-arrival latency is about 1–7 ms.
 - `internal/bench` runs the load generator against an origin and an edge.
 

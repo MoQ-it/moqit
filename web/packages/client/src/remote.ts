@@ -3,7 +3,7 @@
 import { RequestError, type Session, type Subscription } from "@moq-it/moqt";
 import { eachObject } from "./util.ts";
 import { type TrackInfo, TrackKind, TrackSource } from "./gen/moqit/v1/models_pb.ts";
-import { captureClock, Emitter, participantNamespace, RateMeter, retryDelay, sleep, type VideoQuality } from "./util.ts";
+import { captureClock, Emitter, participantNamespace, qualityIndex, RateMeter, retryDelay, sleep, type VideoQuality } from "./util.ts";
 
 const SAMPLE_RATE = 48000;
 const MAX_HOLD_MS = 500; // longest a video frame waits for its audio
@@ -142,8 +142,8 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
     const r = this.info.renditions;
     if (r.length === 0) return "";
     let idx: number;
-    if (this.manual) idx = { high: 0, medium: 1, low: 2 }[this.manual];
-    else idx = this.bySize ?? { high: 0, medium: 1, low: 2 }[this.defaultQuality];
+    if (this.manual) idx = qualityIndex(this.manual, r.length);
+    else idx = this.bySize ?? qualityIndex(this.defaultQuality, r.length);
     idx = Math.min(r.length - 1, idx + this.congestionSteps);
     return r[idx].trackName;
   }
@@ -472,6 +472,8 @@ export function levelOf(pcm: Float32Array): number {
 export class RemoteAudioTrack {
   readonly kind = TrackKind.AUDIO;
   framesDecoded = 0;
+  /** Channels in the decoded audio: 1, or 2 for stereo; 0 before the first frame. */
+  channels = 0;
   /** Capture-to-arrival delay of the latest object in ms; see RemoteVideoTrack.latencyMs. */
   latencyMs = 0;
   private level_ = 0;
@@ -509,17 +511,22 @@ export class RemoteAudioTrack {
     this.decoder = new AudioDecoder({
       output: (data) => {
         this.framesDecoded++;
-        const pcm = new Float32Array(data.numberOfFrames);
-        data.copyTo(pcm, { planeIndex: 0, format: "f32-planar" });
+        this.channels = data.numberOfChannels;
+        const planes: Float32Array[] = [];
+        for (let c = 0; c < Math.min(2, data.numberOfChannels); c++) {
+          const pcm = new Float32Array(data.numberOfFrames);
+          data.copyTo(pcm, { planeIndex: c, format: "f32-planar" });
+          planes.push(pcm);
+        }
         const ts = this.captureTs.shift() ?? data.timestamp;
         data.close();
-        this.level_ = Math.max(levelOf(pcm), this.level * 0.85); // fast attack, slow release
+        this.level_ = Math.max(...planes.map(levelOf), this.level * 0.85); // fast attack, slow release
         this.lastFrameAt = performance.now();
-        this.sink?.push(pcm, ts);
+        this.sink?.push(planes, ts);
       },
       error: (e) => console.warn("moqit: audio decoder error", e),
     });
-    this.decoder.configure({ codec: "opus", sampleRate: SAMPLE_RATE, numberOfChannels: 1 });
+    this.decoder.configure({ codec: "opus", sampleRate: SAMPLE_RATE, numberOfChannels: this.info.channels === 2 ? 2 : 1 });
     await this.follow(session, ns, trackName);
   }
 
@@ -578,9 +585,10 @@ export class RemoteAudioTrack {
 // Playout worklet: a jitter buffer per remote track. It waits for
 // TARGET samples before playing, plays silence on underrun (and refills to
 // TARGET), and drops audio when the buffer exceeds MAX to bound latency.
-// Chunks carry their capture timestamp (µs, publisher clock); about every
-// 50 ms it reports the timestamp of the sample being played, which video
-// uses for lip sync.
+// Chunks hold one plane per channel (mono plays on both outputs) and carry
+// their capture timestamp (µs, publisher clock); about every 50 ms it
+// reports the timestamp of the sample being played, which video uses for
+// lip sync.
 const playoutWorklet = `
 const TARGET = ${SAMPLE_RATE * 0.06}, MAX = ${SAMPLE_RATE * 0.2}, RATE = ${SAMPLE_RATE};
 class MoqitPlayout extends AudioWorkletProcessor {
@@ -588,30 +596,30 @@ class MoqitPlayout extends AudioWorkletProcessor {
     super();
     this.queue = []; this.offset = 0; this.buffered = 0; this.playing = false; this.sinceReport = 0;
     this.port.onmessage = (e) => {
-      this.queue.push(e.data); this.buffered += e.data.pcm.length;
+      this.queue.push(e.data); this.buffered += e.data.pcm[0].length;
       while (this.buffered > MAX && this.queue.length > 1) {
-        const dropped = this.queue.shift(); this.buffered -= dropped.pcm.length - this.offset; this.offset = 0;
+        const dropped = this.queue.shift(); this.buffered -= dropped.pcm[0].length - this.offset; this.offset = 0;
       }
     };
   }
   process(_, outputs) {
-    const out = outputs[0][0];
+    const outs = outputs[0], n = outs[0].length;
     if (!this.playing) {
-      if (this.buffered < TARGET) { out.fill(0); return true; }
+      if (this.buffered < TARGET) { for (const o of outs) o.fill(0); return true; }
       this.playing = true;
     }
     const head = this.queue[0];
     const playingTs = head ? head.ts + (this.offset / RATE) * 1e6 : undefined;
     let i = 0;
-    while (i < out.length && this.queue.length) {
-      const h = this.queue[0];
-      const n = Math.min(out.length - i, h.pcm.length - this.offset);
-      out.set(h.pcm.subarray(this.offset, this.offset + n), i);
-      i += n; this.offset += n; this.buffered -= n;
-      if (this.offset === h.pcm.length) { this.queue.shift(); this.offset = 0; }
+    while (i < n && this.queue.length) {
+      const h = this.queue[0], len = h.pcm[0].length;
+      const k = Math.min(n - i, len - this.offset);
+      for (let c = 0; c < outs.length; c++) outs[c].set(h.pcm[Math.min(c, h.pcm.length - 1)].subarray(this.offset, this.offset + k), i);
+      i += k; this.offset += k; this.buffered -= k;
+      if (this.offset === len) { this.queue.shift(); this.offset = 0; }
     }
-    if (i < out.length) { out.fill(0, i); this.playing = false; }
-    this.sinceReport += out.length;
+    if (i < n) { for (const o of outs) o.fill(0, i); this.playing = false; }
+    this.sinceReport += n;
     if (playingTs !== undefined && this.sinceReport >= RATE * 0.05) {
       this.sinceReport = 0;
       this.port.postMessage({ playingTs, at: currentTime });
@@ -680,7 +688,7 @@ export class AudioOutput {
     const sink = new AudioSink();
     void this.init().then(() => {
       if (sink.closed) return;
-      const node = new AudioWorkletNode(this.ctx!, "moqit-playout", { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+      const node = new AudioWorkletNode(this.ctx!, "moqit-playout", { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
       const gain = this.ctx!.createGain();
       node.connect(gain).connect(this.dest!);
       sink.attach(node, gain, this.ctx!);
@@ -701,7 +709,7 @@ class AudioSink {
   private node?: AudioWorkletNode;
   private gain?: GainNode;
   private ctx?: AudioContext;
-  private pending: { pcm: Float32Array; ts: number }[] = [];
+  private pending: { pcm: Float32Array[]; ts: number }[] = [];
   private playing?: { ts: number; at: number }; // capture ts playing at ctx time `at`
 
   attach(node: AudioWorkletNode, gain: GainNode, ctx: AudioContext) {
@@ -709,12 +717,13 @@ class AudioSink {
     this.gain = gain;
     this.ctx = ctx;
     node.port.onmessage = (e: MessageEvent<{ playingTs: number; at: number }>) => (this.playing = { ts: e.data.playingTs, at: e.data.at });
-    for (const p of this.pending) node.port.postMessage(p, [p.pcm.buffer]);
+    for (const p of this.pending) node.port.postMessage(p, p.pcm.map((c) => c.buffer));
     this.pending = [];
   }
 
-  push(pcm: Float32Array, ts: number) {
-    if (this.node) this.node.port.postMessage({ pcm, ts }, [pcm.buffer]);
+  /** Queues one frame: a plane per channel. */
+  push(pcm: Float32Array[], ts: number) {
+    if (this.node) this.node.port.postMessage({ pcm, ts }, pcm.map((c) => c.buffer));
     else if (this.pending.length < 50) this.pending.push({ pcm, ts });
   }
 
