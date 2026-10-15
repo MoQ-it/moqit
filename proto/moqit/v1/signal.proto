@@ -78,7 +78,15 @@ message InboxMessage {
     DataReceived data = 2;
     string refresh_token = 3;
     MuteTrackCommand mute_track = 4; // the server asks the participant to (un)mute a track
+    SendFeedback send_feedback = 5; // how the participant's media is arriving, every half second while it sends
   }
+}
+
+// How a participant's media reaches the server, for the SDK to fit what it
+// sends to its uplink.
+message SendFeedback {
+  uint32 queuing_delay_ms = 1; // one-way delay over the lowest seen in the last two minutes
+  uint32 receive_bitrate = 2; // media received from the participant, bits per second
 }
 
 message MuteTrackCommand {

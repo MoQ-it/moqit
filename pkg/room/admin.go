@@ -30,6 +30,7 @@ func (m *Manager) CreateRoom(ctx context.Context, req *moqitv1.CreateRoomRequest
 	settings := &moqitv1.Room{
 		Sid: newID("RM_"), Name: req.Name, Metadata: req.Metadata, CreatedAt: time.Now().UnixMilli(),
 		EmptyTimeout: uint32(empty / time.Second), DepartureTimeout: req.DepartureTimeout, MaxParticipants: req.MaxParticipants,
+		DvrWindow: m.dvrWindow(req.DvrWindow),
 	}
 	if c := m.cfg.Cluster; c != nil {
 		r, created, err := c.CreateRoom(ctx, settings, empty)

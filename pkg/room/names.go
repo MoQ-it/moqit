@@ -29,6 +29,7 @@ const (
 	TrackDataLossy = "data-lossy"
 	TrackMic       = "mic"
 	TrackScreenAud = "screen-audio"
+	TrackDvr       = "dvr" // server: fetch-only DvrIndex objects, one Group per unix minute
 	// Camera and screen video use one track per rendition: "camera-h",
 	// "camera-m", "screen-h", ...
 	prefixCamera = "camera"
@@ -81,6 +82,7 @@ const (
 	classData
 	classCatalog
 	classSignal
+	classDvr
 )
 
 // classifyTrack maps a participant track name to its class and, for media,
@@ -91,6 +93,8 @@ func classifyTrack(name string) (trackClass, moqitv1.TrackSource) {
 		return classSignal, 0
 	case name == TrackCatalog:
 		return classCatalog, 0
+	case name == TrackDvr:
+		return classDvr, 0
 	case name == TrackData || name == TrackDataLossy:
 		return classData, 0
 	case name == TrackMic:

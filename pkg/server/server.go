@@ -27,6 +27,7 @@ import (
 
 	"github.com/MoQ-it/moqit/pkg/auth"
 	"github.com/MoQ-it/moqit/pkg/cluster"
+	"github.com/MoQ-it/moqit/pkg/dvr"
 	"github.com/MoQ-it/moqit/pkg/room"
 	"github.com/MoQ-it/moqit/pkg/service"
 	"github.com/MoQ-it/moqt"
@@ -79,6 +80,17 @@ type Config struct {
 	MaxViewers int
 	// ViewerInterval is how often viewer counts are shared (default 5s).
 	ViewerInterval time.Duration
+
+	// DVR, if set, records rooms with a dvr_window so viewers can rewind
+	// them. DVRWindow is the window of rooms created without one (0 =
+	// history off), capped at DVRMaxWindow. DVRMaxHeight picks the video
+	// rendition recorded; DVRFetchLimit caps a viewer's open FETCHes, on
+	// edges too.
+	DVR           *dvr.Store
+	DVRWindow     time.Duration
+	DVRMaxWindow  time.Duration
+	DVRMaxHeight  int
+	DVRFetchLimit int
 }
 
 // Server is a running node.
@@ -148,6 +160,7 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		Node:     cluster.NodeInfo{QUICAddr: cfg.AdvertiseAddr, PublicURL: cfg.PublicURL, CertSHA256: hex.EncodeToString(certHash[:]), Region: cfg.Region},
 		DialPeer: dialPeer,
 		Edge:     cfg.Edge, Tier: cfg.Tier, MaxViewers: cfg.MaxViewers, ViewerInterval: cfg.ViewerInterval,
+		DVR: cfg.DVR, DVRWindow: cfg.DVRWindow, DVRMaxWindow: cfg.DVRMaxWindow, DVRMaxHeight: cfg.DVRMaxHeight, DVRFetchLimit: cfg.DVRFetchLimit,
 	})
 
 	tlsConf := &tls.Config{GetCertificate: certs.get, NextProtos: []string{v22.ALPN, http3.NextProtoH3}}

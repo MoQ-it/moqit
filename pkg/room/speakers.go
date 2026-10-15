@@ -17,7 +17,8 @@ import (
 
 const (
 	locAudioLevel     = 0x0C
-	speakerThreshold  = 0.3 // level (0..1) above which a participant counts as speaking
+	locTimestamp      = 0x10 // capture time, µs since the Unix epoch
+	speakerThreshold  = 0.3  // level (0..1) above which a participant counts as speaking
 	speakerHold       = 800 * time.Millisecond
 	speakersInterval  = 250 * time.Millisecond
 	maxActiveSpeakers = 5
@@ -93,20 +94,33 @@ func (s *speakers) current() ([]*moqitv1.SpeakerInfo, bool) {
 	return out, changed
 }
 
-// onObject is the relay's ObjectHook.
+// onObject is the relay's ObjectHook: audio levels for active speakers, and
+// for a participant connected here, how its media arrives (uplink.go).
 func (m *Manager) onObject(track v22.FullTrackName, _ uint64, o *v22.Object) {
-	if track.Name != TrackMic {
-		return
-	}
 	kind, roomName, identity := parseNamespace(track.Namespace)
 	if kind != nsParticipant {
 		return
 	}
-	kv, ok := o.Properties.Lookup(locAudioLevel)
-	if !ok {
+	class, source := classifyTrack(track.Name)
+	if class != classMedia {
 		return
 	}
-	if r := m.Room(roomName); r != nil {
+	r := m.Room(roomName)
+	if r == nil {
+		return
+	}
+	audio := source == moqitv1.TrackSource_TRACK_SOURCE_MICROPHONE || source == moqitv1.TrackSource_TRACK_SOURCE_SCREEN_AUDIO
+	if p := r.participant(identity); p != nil {
+		var capture uint64
+		if kv, ok := o.Properties.Lookup(locTimestamp); ok {
+			capture = kv.Int
+		}
+		p.uplink.observe(time.Now(), audio, len(o.Payload), capture)
+	}
+	if track.Name != TrackMic {
+		return
+	}
+	if kv, ok := o.Properties.Lookup(locAudioLevel); ok {
 		r.speakers.observe(identity, levelOf(kv.Int))
 	}
 }

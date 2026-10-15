@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync"
 	"time"
 
 	moqitv1 "github.com/MoQ-it/moqit/proto/moqit/v1"
@@ -52,6 +53,9 @@ type Cluster struct {
 	ttl    time.Duration
 	log    *slog.Logger
 	now    func() time.Time
+
+	dvrMu    sync.Mutex
+	dvrCache map[string]dvrCached
 }
 
 // New returns a Cluster for nodeID. Node registrations expire after ttl

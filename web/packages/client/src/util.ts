@@ -64,6 +64,8 @@ export const TrackName = {
   DataLossy: "data-lossy",
   Mic: "mic",
   ScreenAudio: "screen-audio",
+  /** Fetch-only rewind index of a participant. */
+  Dvr: "dvr",
 } as const;
 
 /** LOC (draft-ietf-moq-loc-04) Object properties used by moqit. */

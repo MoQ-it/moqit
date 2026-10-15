@@ -28,6 +28,7 @@ type CreateRoomRequest struct {
 	DepartureTimeout uint32                 `protobuf:"varint,3,opt,name=departure_timeout,json=departureTimeout,proto3" json:"departure_timeout,omitempty"` // seconds the room lives on after the last participant; 0 = default
 	MaxParticipants  uint32                 `protobuf:"varint,4,opt,name=max_participants,json=maxParticipants,proto3" json:"max_participants,omitempty"`    // 0 = unlimited
 	Metadata         string                 `protobuf:"bytes,5,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	DvrWindow        uint32                 `protobuf:"varint,6,opt,name=dvr_window,json=dvrWindow,proto3" json:"dvr_window,omitempty"` // seconds of history viewers can rewind; 0 = the server default
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -95,6 +96,13 @@ func (x *CreateRoomRequest) GetMetadata() string {
 		return x.Metadata
 	}
 	return ""
+}
+
+func (x *CreateRoomRequest) GetDvrWindow() uint32 {
+	if x != nil {
+		return x.DvrWindow
+	}
+	return 0
 }
 
 type CreateRoomResponse struct {
@@ -1104,13 +1112,15 @@ var File_moqit_v1_room_service_proto protoreflect.FileDescriptor
 
 const file_moqit_v1_room_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1bmoqit/v1/room_service.proto\x12\bmoqit.v1\x1a\x15moqit/v1/models.proto\"\xc0\x01\n" +
+	"\x1bmoqit/v1/room_service.proto\x12\bmoqit.v1\x1a\x15moqit/v1/models.proto\"\xdf\x01\n" +
 	"\x11CreateRoomRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rempty_timeout\x18\x02 \x01(\rR\femptyTimeout\x12+\n" +
 	"\x11departure_timeout\x18\x03 \x01(\rR\x10departureTimeout\x12)\n" +
 	"\x10max_participants\x18\x04 \x01(\rR\x0fmaxParticipants\x12\x1a\n" +
-	"\bmetadata\x18\x05 \x01(\tR\bmetadata\"8\n" +
+	"\bmetadata\x18\x05 \x01(\tR\bmetadata\x12\x1d\n" +
+	"\n" +
+	"dvr_window\x18\x06 \x01(\rR\tdvrWindow\"8\n" +
 	"\x12CreateRoomResponse\x12\"\n" +
 	"\x04room\x18\x01 \x01(\v2\x0e.moqit.v1.RoomR\x04room\"(\n" +
 	"\x10ListRoomsRequest\x12\x14\n" +

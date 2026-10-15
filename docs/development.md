@@ -40,10 +40,17 @@ go test -tags browser ./test/e2e                     # SDK in headless Chrome an
   - routing, including viewers to edges;
   - viewers (permissions, the viewer cap, viewer counts);
   - edge nodes, including the room and a publisher moving to another node;
-  - cascaded edges, including failover when a tier 1 edge goes away.
+  - cascaded edges, including failover when a tier 1 edge goes away;
+  - rewind: recording, the index, FETCH by viewers through edges and a cascade, history after a participant leaves or moves and after a node restarts, refusals, and `dvr_window` in `CreateRoom`.
+- `pkg/dvr` tests the recording store: Group ordering, segments, checkpoints, retention, the disk cap and recovering a torn segment.
 - `sdk/go/client` joins a real node as a participant: declaring tracks, a subscriber starting from the cached keyframe, audio levels, `MuteTrack`, `RemoveParticipant` and leaving.
-- `test/e2e` runs two participants and a viewer in real browsers (fake devices) against a real node, on a single node and across two clustered nodes with the viewer on an edge. It covers join, camera and mic, lip sync, quality switching, pausing hidden video, data, server-side mute, metadata and leave, plus the viewer receiving video and audio without being a participant. On localhost, capture-to-arrival latency is about 1–7 ms.
+- `test/e2e` runs two participants and a viewer in real browsers (fake devices) against a real node, on a single node and across two clustered nodes with the viewer on an edge. It covers join, camera and mic, lip sync, quality switching, pausing hidden video, data, server-side mute, metadata and leave, plus the viewer receiving video and audio without being a participant. The viewer also rewinds 5 s, checking that audio and video play about 5 s behind and in sync, and returns to live. On localhost, capture-to-arrival latency is about 1–7 ms.
+- `test/e2e` also has `TestCongestionChrome` and `TestCongestionFirefox`. Alice publishes through `Shaper`, a UDP proxy that limits her uplink to a rate the page changes (it has its own unit test). The test checks:
+  - nothing is limited while the uplink is open;
+  - at 600 kbps she moves to a smaller layer and Bob's latency drains;
+  - 720p comes back once the limit is lifted.
 - `internal/bench` runs the load generator against an origin and an edge.
+- In the moqt repository, `go test ./...` covers FETCH (session, relay archive and forwarding, `Relay.Record`), and `go test -tags browser ./ts/e2e` fetches from a browser.
 
 ## Load testing
 

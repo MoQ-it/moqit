@@ -1,5 +1,5 @@
 import { Room } from "@moqit/client";
-import { ConferenceLayout, RoomProvider, StartAudio } from "@moqit/react";
+import { ConferenceLayout, RoomProvider, Scrubber, StartAudio, useRoom, useTimeline } from "@moqit/react";
 import { useEffect, useState } from "react";
 import { navigate } from "./main.tsx";
 import { type ConnectionDetails, hexBytes, ParticipantCount, ViewerCount } from "./Meeting.tsx";
@@ -32,7 +32,7 @@ export function Watch({ room: roomName }: { room: string }) {
           attempt = 0;
           void r.startAudio().catch(() => {});
           setRoom(r);
-          await r.next("disconnected");
+          await new Promise((resolve) => r.once("disconnected", resolve)); // next() would time out
           if (cancelled) return;
           setRoom(undefined);
           setStatus("Reconnecting…");
@@ -76,6 +76,34 @@ export function Watch({ room: roomName }: { room: string }) {
           </RoomProvider>
         )}
       </section>
+      {room && (
+        <RoomProvider room={room}>
+          <RewindBar />
+        </RoomProvider>
+      )}
     </div>
+  );
+}
+
+/** The rewind bar, for meetings that keep history; ← and → step 10 seconds. */
+function RewindBar() {
+  const room = useRoom();
+  const tl = useTimeline();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (!room.timeline.available || el?.tagName === "INPUT" || el?.tagName === "TEXTAREA") return;
+      const behind = room.timeline.behind;
+      if (e.key === "ArrowLeft") void room.seek(behind + 10).catch(() => {});
+      else if (e.key === "ArrowRight") void (behind - 10 < 2 ? room.goLive() : room.seek(behind - 10)).catch(() => {});
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [room]);
+  if (!tl.available) return null;
+  return (
+    <footer>
+      <Scrubber />
+    </footer>
   );
 }

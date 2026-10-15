@@ -5,6 +5,7 @@ package testclient
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -371,4 +372,43 @@ func MicTracks() *moqitv1.ClientSignal {
 		Name: "microphone", Kind: moqitv1.TrackKind_TRACK_KIND_AUDIO, Source: moqitv1.TrackSource_TRACK_SOURCE_MICROPHONE,
 		Codec: "opus", Renditions: []*moqitv1.Rendition{{TrackName: room.TrackMic, Bitrate: 32000}},
 	}}}}}
+}
+
+// Fetch fetches a participant's track by an absolute Group range
+// (inclusive) and returns every entry.
+func (c *Client) Fetch(identity, name string, start, end uint64) ([]*v22.FetchObject, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	filter := &v22.LocationFilter{Type: v22.FilterAbsoluteRange, StartGroup: start, EndGroupDelta: end - start}
+	f, err := c.Sess.Fetch(ctx, v22.FullTrackName{Namespace: room.ParticipantNamespace(c.Room, identity), Name: name}, &v22.Params{LocationFilter: filter})
+	if err != nil {
+		return nil, err
+	}
+	var out []*v22.FetchObject
+	for {
+		o, err := f.Next(ctx)
+		if err == io.EOF {
+			return out, nil
+		}
+		if err != nil {
+			return out, err
+		}
+		out = append(out, o)
+	}
+}
+
+// DvrIndex fetches a participant's rewind index for the minutes from
+// minutes ago up to now.
+func (c *Client) DvrIndex(identity string, minutes uint64) ([]*moqitv1.DvrIndex, error) {
+	now := uint64(time.Now().Unix() / 60)
+	objs, err := c.Fetch(identity, room.TrackDvr, now-minutes, now)
+	var out []*moqitv1.DvrIndex
+	for _, o := range objs {
+		var idx moqitv1.DvrIndex
+		if err := proto.Unmarshal(o.Payload, &idx); err != nil {
+			return nil, err
+		}
+		out = append(out, &idx)
+	}
+	return out, err
 }

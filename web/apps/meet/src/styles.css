@@ -199,8 +199,16 @@ select:disabled { opacity: 0.5; }
 .send-quality select { flex: 1; }
 .quality-note { color: var(--muted); font-size: 0.8rem; margin-top: -6px; }
 .moqit-meeting-stats { color: var(--muted); font: 0.8rem/1.4 ui-monospace, monospace; margin-left: auto; }
+.moqit-meeting-stats[data-limited], .moqit-stats [data-limited] { color: #f5a524; }
 .moqit-presenting-preview { position: relative; }
 
 /* watch (read-only viewer) */
 .watch .badge { background: var(--accent); color: white; border-radius: 6px; padding: 2px 8px; font-size: 0.8rem; }
 .watch header .leave { margin-left: auto; background: var(--danger); border-color: var(--danger); color: white; }
+
+/* rewind (viewers) */
+.moqit-scrubber { display: flex; align-items: center; gap: 10px; }
+.moqit-scrubber input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.moqit-behind { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 4.5em; text-align: right; }
+.moqit-live { font-weight: 600; letter-spacing: 0.5px; }
+.moqit-live[data-live="true"] { background: var(--danger); border-color: var(--danger); color: white; opacity: 1; }

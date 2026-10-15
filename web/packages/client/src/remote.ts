@@ -263,7 +263,13 @@ export class RemoteVideoTrack {
     this.decoder = this.newDecoder();
   }
 
-  private newDecoder(): VideoDecoder {
+  /** Playing rewound history (Room.seek) rather than the live track. */
+  get rewound(): boolean {
+    return this.archive;
+  }
+  private archive = false;
+
+  private newDecoder(codec = this.info.codec): VideoDecoder {
     const d = new VideoDecoder({
       output: (frame) => {
         this.framesDecoded++;
@@ -273,8 +279,52 @@ export class RemoteVideoTrack {
       },
       error: (e) => console.warn("moqit: video decoder error", e),
     });
-    d.configure({ codec: this.info.codec, optimizeForLatency: true });
+    d.configure({ codec, optimizeForLatency: true });
     return d;
+  }
+
+  private resetDecoder(codec?: string) {
+    try {
+      this.decoder.close();
+    } catch {
+      // already closed
+    }
+    for (const f of this.held) f.close();
+    this.held = [];
+    this.decoder = this.newDecoder(codec);
+  }
+
+  /** @internal Rewind: drop the live subscription; archived objects are decoded instead. */
+  enterArchive() {
+    if (this.stopped) return;
+    this.archive = true;
+    this.generation++;
+    const sub = this.sub;
+    this.sub = undefined;
+    this.inFlight?.cancel();
+    sub?.unsubscribe();
+    this.resetDecoder();
+  }
+
+  /** @internal An archived recording starts, possibly with another codec. */
+  archiveEpoch(codec?: string) {
+    if (this.archive) this.resetDecoder(codec || this.info.codec);
+  }
+
+  /** @internal One archived object; ts is its capture time (µs). */
+  archiveObject(payload: Uint8Array, ts: number, key: boolean) {
+    if (!this.archive || this.decoder.state !== "configured") return;
+    this.meter.add(payload.byteLength);
+    this.latencyMs = (captureClock() - ts) / 1000;
+    this.decoder.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: ts, data: payload }));
+  }
+
+  /** @internal Back to the live track, from a fresh keyframe. */
+  async leaveArchive() {
+    if (!this.archive) return;
+    this.archive = false;
+    this.resetDecoder();
+    await this.switchTo(this.trackName).catch(() => this.resubscribe(this.generation));
   }
 
   // Shows frames no earlier than the audio playing with them. Frames
@@ -311,6 +361,10 @@ export class RemoteVideoTrack {
 
   /** @internal Subscribes to another rendition; the old one is dropped once the new one delivers. */
   async switchTo(trackName: string) {
+    if (this.archive) {
+      this.trackName = trackName; // taken up again on leaving the archive
+      return;
+    }
     if (!this.session || this.stopped) return;
     const old = this.sub;
     const gen = ++this.generation;
@@ -374,7 +428,7 @@ export class RemoteVideoTrack {
 
   /** @internal Stops (or resumes) forwarding while the element is not visible. */
   async setPaused(paused: boolean) {
-    if (paused === this.paused || !this.sub) return;
+    if (paused === this.paused || !this.sub || this.archive) return;
     this.paused = paused;
     if (paused) this.inFlight?.cancel(); // stop the group in progress too
     // Resuming asks for a fresh Group so decoding restarts at a keyframe.
@@ -502,8 +556,68 @@ export class RemoteAudioTrack {
   private sub?: Subscription;
   private sink?: AudioSink;
   private stopped = false;
+  private archive = false;
+  private live?: { session: Session; ns: string[]; trackName: string };
+  private decoderChannels = 1;
 
   constructor(readonly info: TrackInfo, private output: AudioOutput) {}
+
+  /** Playing rewound history (Room.seek) rather than the live track. */
+  get rewound(): boolean {
+    return this.archive;
+  }
+
+  private configure(channels: number) {
+    this.decoderChannels = channels === 2 ? 2 : 1;
+    this.decoder?.configure({ codec: "opus", sampleRate: SAMPLE_RATE, numberOfChannels: this.decoderChannels });
+  }
+
+  // Drops queued audio: decodes in flight and what the worklet buffered.
+  private flush() {
+    try {
+      this.decoder?.reset();
+      this.configure(this.decoderChannels);
+    } catch {
+      // closed
+    }
+    this.captureTs = [];
+    this.sink?.flush();
+  }
+
+  /** @internal Rewind: drop the live subscription; archived objects are decoded instead. */
+  enterArchive() {
+    if (this.stopped) return;
+    this.archive = true;
+    const sub = this.sub;
+    this.sub = undefined;
+    sub?.unsubscribe();
+    this.flush();
+  }
+
+  /** @internal An archived recording starts. */
+  archiveEpoch(channels?: number) {
+    if (!this.archive) return;
+    this.flush();
+    if (channels !== undefined && (channels === 2 ? 2 : 1) !== this.decoderChannels) this.configure(channels);
+  }
+
+  /** @internal One archived object; ts is its capture time (µs). */
+  archiveObject(payload: Uint8Array, ts: number) {
+    if (!this.archive || this.decoder?.state !== "configured") return;
+    this.meter.add(payload.byteLength);
+    this.latencyMs = (captureClock() - ts) / 1000;
+    this.captureTs.push(ts);
+    this.decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: ts, data: payload }));
+  }
+
+  /** @internal Back to the live track. */
+  async leaveArchive() {
+    if (!this.archive || !this.live) return;
+    this.archive = false;
+    this.flush();
+    const { session, ns, trackName } = this.live;
+    await this.follow(session, ns, trackName).catch(() => {});
+  }
 
   /** @internal */
   async start(session: Session, ns: string[], trackName: string) {
@@ -526,19 +640,20 @@ export class RemoteAudioTrack {
       },
       error: (e) => console.warn("moqit: audio decoder error", e),
     });
-    this.decoder.configure({ codec: "opus", sampleRate: SAMPLE_RATE, numberOfChannels: this.info.channels === 2 ? 2 : 1 });
+    this.configure(this.info.channels);
+    this.live = { session, ns, trackName };
     await this.follow(session, ns, trackName);
   }
 
   // Subscribes, and again whenever the subscription ends while playing.
   private async follow(session: Session, ns: string[], trackName: string) {
-    if (this.stopped) return;
+    if (this.stopped || this.archive) return;
     const sub = await session.subscribe({ namespace: ns, name: trackName }, startParams);
     this.sub = sub;
     void this.consume(sub).catch(() => {}).finally(async () => {
       for (let attempt = 0; !this.stopped && this.sub === sub; attempt++) {
         await sleep(retryDelay(attempt));
-        if (this.stopped || this.sub !== sub) return;
+        if (this.stopped || this.sub !== sub || this.archive) return;
         try {
           return await this.follow(session, ns, trackName);
         } catch {
@@ -552,6 +667,7 @@ export class RemoteAudioTrack {
     for await (const group of sub) {
       if (this.decoder?.state !== "configured") return;
       await eachObject(group, (o) => {
+        if (this.archive) return false;
         this.meter.add(o.payload.byteLength);
         if (this.decoder?.state !== "configured") return false;
         const ts = timestampOf(o.properties);
@@ -596,6 +712,7 @@ class MoqitPlayout extends AudioWorkletProcessor {
     super();
     this.queue = []; this.offset = 0; this.buffered = 0; this.playing = false; this.sinceReport = 0;
     this.port.onmessage = (e) => {
+      if (e.data.flush) { this.queue = []; this.offset = 0; this.buffered = 0; this.playing = false; return; }
       this.queue.push(e.data); this.buffered += e.data.pcm[0].length;
       while (this.buffered > MAX && this.queue.length > 1) {
         const dropped = this.queue.shift(); this.buffered -= dropped.pcm[0].length - this.offset; this.offset = 0;
@@ -741,6 +858,13 @@ class AudioSink {
 
   setVolume(v: number) {
     if (this.gain) this.gain.gain.value = v;
+  }
+
+  /** Drops the audio queued for playing. */
+  flush() {
+    this.pending = [];
+    this.playing = undefined;
+    this.node?.port.postMessage({ flush: true });
   }
 
   close() {

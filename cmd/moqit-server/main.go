@@ -23,6 +23,7 @@ import (
 
 	"github.com/MoQ-it/moqit/pkg/auth"
 	"github.com/MoQ-it/moqit/pkg/cluster"
+	"github.com/MoQ-it/moqit/pkg/dvr"
 	"github.com/MoQ-it/moqit/pkg/server"
 	"github.com/MoQ-it/moqit/pkg/webhook"
 	"github.com/redis/go-redis/v9"
@@ -51,11 +52,18 @@ func main() {
 	edge := flag.Bool("edge", os.Getenv("MOQIT_EDGE") == "true", "edge node: serve read-only viewers only, fetching tracks from the cluster (needs -redis; env MOQIT_EDGE=true)")
 	maxViewers := flag.Int("max-viewers", 0, "maximum viewer sessions on this node; 0 = unlimited")
 	tier := flag.Int("tier", 0, "edge tier in a cascade: 1 (default) fetches from the nodes hosting tracks, 2 and up from an edge one tier up in the same -region")
+	dvrDir := flag.String("dvr-dir", os.Getenv("MOQIT_DVR_DIR"), "directory recording rooms that keep history, so viewers can rewind; empty = off (env MOQIT_DVR_DIR)")
+	dvrWindow := flag.Duration("dvr-window", 0, "history window of rooms created without one; 0 = only rooms created with a dvr_window keep history")
+	dvrMaxWindow := flag.Duration("dvr-max-window", 6*time.Hour, "longest history window a room may keep")
+	dvrMaxBytes := flag.Int64("dvr-max-bytes", 0, "disk the recordings may use; the oldest are deleted first; 0 = no cap")
+	dvrMaxHeight := flag.Int("dvr-max-height", 720, "record the largest video rendition at most this high")
+	dvrFetchLimit := flag.Int("dvr-fetch-limit", 4, "concurrent rewind FETCHes per viewer; 0 = no cap")
 	webhooks := flag.String("webhook", os.Getenv("MOQIT_WEBHOOK"), "comma-separated URLs receiving webhook events, signed with the first API key (env MOQIT_WEBHOOK)")
 	flag.Parse()
 	webhookURLs = *webhooks
 	clusterCfg = clusterFlags{*redisURL, *nodeID, *advertise, *publicURL, *region}
 	edgeNode, viewerCap, edgeTier = *edge, *maxViewers, *tier
+	dvrCfg = dvrFlags{*dvrDir, *dvrWindow, *dvrMaxWindow, *dvrMaxBytes, *dvrMaxHeight, *dvrFetchLimit}
 
 	level := slog.LevelInfo
 	if *verbose {
@@ -126,6 +134,15 @@ func run(log *slog.Logger, dev bool, udpAddr, httpAddr, keysFlag, certFile, keyF
 		cfg.Cluster = cluster.New(rdb, id, 10*time.Second, log)
 		log.Info("joining cluster", "node", id, "advertise", cfg.AdvertiseAddr, "publicUrl", cfg.PublicURL, "edge", edgeNode)
 	}
+	cfg.DVRFetchLimit = dvrCfg.fetchLimit // edges forward viewers' FETCHes too
+	if dvrCfg.dir != "" {
+		store, err := dvr.Open(dvr.Config{Dir: dvrCfg.dir, MaxBytes: dvrCfg.maxBytes, Logger: log})
+		if err != nil {
+			return fmt.Errorf("-dvr-dir: %w", err)
+		}
+		cfg.DVR, cfg.DVRWindow, cfg.DVRMaxWindow, cfg.DVRMaxHeight = store, dvrCfg.window, dvrCfg.maxWindow, dvrCfg.maxHeight
+		log.Info("rewind enabled", "dir", dvrCfg.dir, "window", dvrCfg.window, "maxWindow", dvrCfg.maxWindow, "stored", store.Size())
+	}
 	if webhookURLs != "" {
 		key := firstKey(keysFlag, dev)
 		cfg.Webhook = webhook.NewNotifier(strings.Split(webhookURLs, ","), key, keys[key], log)
@@ -189,6 +206,15 @@ func firstKey(keysFlag string, dev bool) string {
 }
 
 var clusterCfg clusterFlags
+
+type dvrFlags struct {
+	dir                   string
+	window, maxWindow     time.Duration
+	maxBytes              int64
+	maxHeight, fetchLimit int
+}
+
+var dvrCfg dvrFlags
 
 var (
 	edgeNode  bool

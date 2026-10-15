@@ -52,8 +52,10 @@ func newRoom(m *Manager, name string, settings *moqitv1.Room) *Room {
 		DepartureTimeout: uint32(m.cfg.DepartureTimeout / time.Second),
 		MaxParticipants:  uint32(m.cfg.MaxParticipants),
 		CreatedAt:        time.Now().UnixMilli(),
+		DvrWindow:        m.dvrWindow(0),
 	}
 	if settings != nil {
+		info.DvrWindow = settings.DvrWindow
 		info.Metadata, info.EmptyTimeout = settings.Metadata, settings.EmptyTimeout
 		if settings.DepartureTimeout > 0 {
 			info.DepartureTimeout = settings.DepartureTimeout
@@ -73,6 +75,7 @@ func newRoom(m *Manager, name string, settings *moqitv1.Room) *Room {
 	}
 	go r.init()
 	go r.publishSpeakers(r.stopLoops)
+	go r.sendFeedback(r.stopLoops)
 	go r.publishViewers(r.stopLoops)
 	return r
 }
@@ -131,6 +134,7 @@ func (r *Room) joinCluster(ctx context.Context) error {
 	}
 	r.mu.Lock()
 	r.info.Sid, r.info.CreatedAt, r.info.Metadata, r.info.EmptyTimeout = info.Sid, info.CreatedAt, info.Metadata, info.EmptyTimeout
+	r.info.DvrWindow = info.DvrWindow
 	if info.DepartureTimeout > 0 {
 		r.info.DepartureTimeout = info.DepartureTimeout
 	}
@@ -451,6 +455,7 @@ func (r *Room) remove(p *Participant, reason moqitv1.DisconnectReason) bool {
 	}
 	delete(r.participants, p.info.Identity)
 	go p.inbox.close()
+	go r.m.syncRecordings(r, p.info.Identity)
 	r.info.NumParticipants = uint32(len(r.participants) + len(r.remote))
 	if !p.info.Permission.GetHidden() {
 		r.publishLocked(&moqitv1.RoomStateUpdate{Update: &moqitv1.RoomStateUpdate_ParticipantLeft{ParticipantLeft: &moqitv1.ParticipantLeft{

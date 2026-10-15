@@ -42,6 +42,26 @@ await room.localParticipant.setMicrophoneEnabled(true); // rejects: "viewers can
 
 Viewers receive participants' broadcast data but not targeted data.
 
+### Rewinding
+
+When the room keeps history (`room.info.dvrWindow > 0`; see [server.md](server.md#rewind-dvr)), a viewer can rewind it, like a live stream:
+- `seek(seconds)` plays every participant from that far behind live, as far back as the history goes, and keeps playing at normal speed from there.
+- `goLive()` returns to the live room.
+- `room.timeline` reports `available`, `live`, `behind` (seconds) and `history` (seconds there are to rewind to); `timelineChanged` fires when it changes.
+- `track.rewound` tells whether a remote track is playing history.
+
+```ts
+if (room.timeline.available) {
+  await room.seek(30);          // everyone, 30 s ago, lip-synced
+  room.timeline.behind;         // ≈ 30
+  await room.goLive();
+}
+```
+
+- **What is played:** one rendition per source is recorded (by default the largest up to 720p). While rewound, the quality and adaptive-stream settings don't apply. Tracks subscribed while rewound start rewound too.
+- **Who appears:** participants who have left are not listed, so their history isn't played.
+- **How it works:** history arrives by MoQ FETCH, about 10 seconds at a time, and is paced by a playhead in server time. Participants stay in step, and each one's audio and video stay in sync.
+
 **Resubscribing:** for viewers and participants alike, the room track and subscribed remote tracks are subscribed again, with jittered backoff (0.5 s doubling to 10 s), when they end or can't be had yet. This covers a node closing the room, a publisher reconnecting to another node, and a track a node can't serve yet. `room.numViewers` and `viewerCountChanged` report the room's viewers for everyone.
 
 ## Devices
@@ -57,13 +77,33 @@ await room.switchActiveDevice("audiooutput", speakerId);       // Chromium and F
 ```ts
 await room.localParticipant.setCameraResolution("1080p"); // largest layer sent; applies live
 await room.setVideoQuality("low");                         // every remote video at its smallest layer; undefined = by size
-room.getStats();                                           // { sendBitrate, receiveBitrate } in bits/s
-localVideoTrack.sending();                                 // [{ rendition, width, height, bitrate }] per layer sent
+room.getStats();                                           // { sendBitrate, receiveBitrate, sendLimited, sendTarget }, bits/s
+localVideoTrack.sending();                                 // per layer sent: rendition, width, height, bitrate,
+                                                           //   targetBitrate, framerate, limited, sendDelayMs, droppedFrames
+localVideoTrack.suspended();                               // layers paused because the uplink can't carry them
+room.on("sendLimitedChanged", (limited) => …);
 remoteVideoTrack.bitrate;                                  // also width, height; publication.currentRendition
 remoteAudioTrack.channels;                                 // 2 for stereo, e.g. from the RTMP ingress
 ```
 
 `high`, `medium` and `low` pick the largest, middle and smallest of however many layers a track has: three for a browser's camera, any number from the [RTMP ingress](https://github.com/MoQ-it/moqit-ingress).
+
+### Fitting the uplink
+
+With `adaptiveSend` (on by default), the SDK fits the video it sends to what its connection carries:
+
+- **The signal:** the node a participant is connected to measures how its media arrives. Each Object's arrival time minus its LOC capture time, compared with the lowest seen in the last two minutes, gives the queuing delay on the way in. The node reports it, with the bitrate it receives, in a `SendFeedback` inbox message every half second.
+- **Why the server:** browsers expose neither the RTT (`WebTransport.getStats()` is missing in Chrome 155 and Firefox 157) nor their send buffers. In tests with a slow uplink, latency grew in the network while the SDK's own send queue stayed empty.
+- **Decreasing:** when the delay goes over 100 ms (or the local send queue over 150 ms), the video target drops to 85% of what the node received, and holds for 2 s.
+- **Increasing:** while the delay stays under 30 ms, the target grows by 5% (at least 50 kbps) a second. 30 s after the last decrease it is back to the full bitrates.
+- **Sharing the target:** the target is shared among the layers being encoded, smallest layer of each track first and screens before cameras.
+  - Each layer's bitrate is lowered down to 40% of its own.
+  - Below that it runs at half frame rate.
+  - Below 25% it is paused: re-announced without that layer, so its viewers move to a smaller one. The smallest layer of each track is never paused.
+- **Resuming:** a paused layer resumes after 10 s of calm, if the target leaves a quarter to spare. If it is paused again within 30 s, it waits twice as long, up to 2 minutes.
+- **Latency guard:** a frame that has waited 500 ms in the send queue drops the queue. The Group in progress is reset and sending resumes at a keyframe.
+
+In the browser tests, Chrome and Firefox behind a 600 kbps uplink went from 720p to the 540p layer within 4.5–6 s. Viewer latency then stayed under 30 ms, against 0.3–0.8 s without adaptation. Once the limit was lifted, 720p came back within 8–17 s.
 
 ## Processors (effects)
 
@@ -95,6 +135,7 @@ await room.localParticipant.setProcessor(TrackSource.CAMERA, blur); // kept when
   - two relay-dropped groups within 5 s step quality down, and 20 s without one steps it back up;
   - `setVideoQuality` pins a rendition; `undefined` returns to automatic.
 - **Delivery timeouts (relay):** a subscriber more than 1 s behind the live edge has its stale group reset, so it skips ahead rather than queueing old video.
+- **Send-side adaptation:** a publisher lowers bitrates, frame rates, and finally pauses its largest layers when its uplink can't carry them. See [Fitting the uplink](#fitting-the-uplink).
 - **Active speaker (server):** the relay reads the LOC audio-level property of every relayed `mic` object (never the payload) and publishes the loudest participants on the room track (`room.activeSpeakers`).
 - **Lip sync:** the playout worklet reports the capture time of the audio being heard, and video frames ahead of it are held, up to 500 ms. In the browser tests the mean A/V offset is within ±4 ms.
 
@@ -120,4 +161,13 @@ import { ConferenceLayout, ControlBar, RoomProvider, StartAudio } from "@moqit/r
 
 For a viewer, `useParticipants` lists only the remote participants and `useLocalParticipant` returns `undefined`; `useViewerCount` gives the number of viewers.
 
-Hooks include `useParticipants`, `useLocalParticipant`, `useViewerCount`, `useVideoTrack`, `useIsSpeaking`, `useActiveSpeakers`, `useChat`, `useScreenShares`, `useMediaDevices` and `useActiveDevice`; components include `ParticipantTile`, `GridLayout`, `FocusLayout`, `DeviceSelect`, `Chat` and `MeetingStats`.
+For a viewer of a room that keeps history, `<Scrubber />` is a rewind bar: a slider over the history, a −10s button and LIVE. It renders nothing otherwise. `useTimeline()` returns `room.timeline` and re-renders every second.
+
+```tsx
+<RoomProvider room={room}>
+  <ConferenceLayout />
+  <Scrubber />
+</RoomProvider>
+```
+
+Hooks include `useParticipants`, `useLocalParticipant`, `useViewerCount`, `useTimeline`, `useVideoTrack`, `useIsSpeaking`, `useActiveSpeakers`, `useChat`, `useScreenShares`, `useMediaDevices` and `useActiveDevice`; components include `ParticipantTile`, `GridLayout`, `FocusLayout`, `DeviceSelect`, `Chat`, `MeetingStats` and `Scrubber`.

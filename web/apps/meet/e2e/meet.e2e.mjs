@@ -29,7 +29,8 @@ async function main() {
   if (!process.env.MEET_URL) {
     const bin = join(mkdtempSync(join(tmpdir(), "meet-bin-")), "meet");
     execFileSync("go", ["build", "-o", bin, "./cmd/meet"], { cwd: repo, stdio: "inherit" });
-    server = spawn(bin, ["-dev", "-addr", `127.0.0.1:${port}`, "-udp", `:${port}`, "-static", join(repo, "web/apps/meet/dist")], { stdio: ["ignore", "ignore", "pipe"] });
+    const dvr = mkdtempSync(join(tmpdir(), "meet-dvr-"));
+    server = spawn(bin, ["-dev", "-addr", `127.0.0.1:${port}`, "-udp", `:${port}`, "-static", join(repo, "web/apps/meet/dist"), "-dvr-dir", dvr], { stdio: ["ignore", "ignore", "pipe"] });
     server.stderr.on("data", (d) => (serverLog += d));
   }
   try {
@@ -180,6 +181,42 @@ function studioShare(page, prefix) {
 const count = (page) => page.locator(".count").getAttribute("data-count").then(Number);
 const tile = (page, prefix) => page.locator(`.moqit-tile[data-source=camera][data-identity^="${prefix}"]`);
 
+/** Frames Alice's camera tile shows on a page within 1.5s. */
+function framesShown(page, prefix) {
+  return page.evaluate((prefix) => new Promise((resolve) => {
+    const tile = [...document.querySelectorAll(".moqit-tile[data-source=camera]")].find((t) => t.dataset.identity.startsWith(prefix));
+    const v = tile?.querySelector("video");
+    if (!v) return resolve(-1);
+    let n = 0;
+    const tick = () => (n++, v.requestVideoFrameCallback(tick));
+    v.requestVideoFrameCallback(tick);
+    setTimeout(() => resolve(n), 1500);
+  }), prefix);
+}
+
+// The viewer steps 10 seconds back with the rewind bar, keeps seeing
+// video, and returns to live.
+async function rewind(viewer) {
+  const bar = viewer.locator(".moqit-scrubber");
+  await waitFor(async () => (await bar.count()) === 1 && Number(await bar.locator("input").getAttribute("max")) >= 12, "the viewer to have 12s of history", 30000);
+  await bar.locator(".moqit-back").click();
+  await waitFor(async () => (await bar.getAttribute("data-live")) === "false" && Number(await bar.getAttribute("data-behind")) >= 8, "the viewer to be about 10s behind");
+  // Rewound playback outlasts the SDK's default 10s event timeout.
+  await new Promise((r) => setTimeout(r, 11000));
+  if ((await bar.getAttribute("data-live")) !== "false") throw new Error("the viewer left the rewind by itself");
+  await waitFor(async () => (await framesShown(viewer, "alice-")) >= 5, "rewound video to play");
+  const behind = await bar.getAttribute("data-behind");
+  await viewer.screenshot({ path: join(shots, "viewer-rewound.png") });
+  // ← steps 10s further back, or to the start of the history.
+  const history = Number(await bar.locator("input").getAttribute("max"));
+  await viewer.keyboard.press("ArrowLeft");
+  await waitFor(async () => Number(await bar.getAttribute("data-behind")) >= Math.min(Number(behind) + 8, history - 3), "← to step further back");
+  await bar.locator(".moqit-live").click();
+  await waitFor(async () => (await bar.getAttribute("data-live")) === "true", "the viewer to be live again");
+  await waitFor(async () => (await framesShown(viewer, "alice-")) >= 5, "live video to play again");
+  log(`viewer rewound ${behind}s, then 10s more with ←, and went live again`);
+}
+
 async function scenario(browser) {
   const alice = await join_(browser, null, "Alice", true);
   const url = alice.url();
@@ -197,12 +234,14 @@ async function scenario(browser) {
   const viewerCtx = await browser.newContext({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: insecure });
   const viewer = await viewerCtx.newPage();
   viewer.on("pageerror", (e) => console.error("[viewer] page error:", e.message));
+  viewer.on("console", (m) => ["warning", "error"].includes(m.type()) && console.error(`[viewer] ${m.type()}: ${m.text()}`));
   await viewer.goto(url.replace("/r/", "/watch/"));
   await waitFor(() => videoPlaying(viewer, "alice-"), "the viewer to see Alice's video");
   await waitFor(async () => (await count(viewer)) === 2, "the viewer to see two participants");
   await waitFor(async () => (await alice.locator(".viewers").getAttribute("data-viewers", { timeout: 500 }).catch(() => null)) === "1", "Alice to see one viewer");
   if ((await count(alice)) !== 2 || (await count(bob)) !== 2) throw new Error("the viewer was counted as a participant");
   await viewer.screenshot({ path: join(shots, "viewer.png") });
+  if (!process.env.MEET_URL) await rewind(viewer); // meet -dev keeps an hour of history
   await viewerCtx.close();
   await waitFor(async () => (await alice.locator(".viewers").count()) === 0, "the viewer count to clear");
   log("viewer watched read-only and was counted as a viewer");
@@ -320,7 +359,10 @@ const RAW = 0.01;
   const aliceSends = () => alice.locator('.moqit-tile[data-source=camera][data-identity^="alice-"] .moqit-stats div[data-rendition]').evaluateAll((ds) => ds.map((d) => [d.dataset.rendition, Number(d.dataset.bitrate)]));
   const sent = Object.fromEntries(await aliceSends());
   const got = Number(await tile(bob, "alice-").locator(".moqit-stats").getAttribute("data-bitrate"));
-  if (!(sent["camera-h"] > 0) || Object.keys(sent).length !== 1) throw new Error(`Alice should send camera-h only: ${JSON.stringify(sent)}`);
+  // Besides camera-h for Bob, the server records camera-m (the largest
+  // rendition up to 720p) for rewinding.
+  const extra = Object.keys(sent).filter((r) => r !== "camera-h" && !(r === "camera-m" && !process.env.MEET_URL));
+  if (!(sent["camera-h"] > 0) || extra.length) throw new Error(`Alice should send camera-h (and the recorded camera-m) only: ${JSON.stringify(sent)}`);
   if (!(got > 0.6 * sent["camera-h"] && got < 1.6 * sent["camera-h"])) throw new Error(`Bob receives ${got} bps of Alice's camera-h, she sends ${sent["camera-h"]} bps`);
   const header = async (page) => ({ send: Number(await page.locator(".moqit-meeting-stats").getAttribute("data-send")), receive: Number(await page.locator(".moqit-meeting-stats").getAttribute("data-receive")) });
   const [ha, hb] = [await header(alice), await header(bob)];

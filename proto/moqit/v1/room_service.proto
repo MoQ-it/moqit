@@ -33,6 +33,7 @@ message CreateRoomRequest {
   uint32 departure_timeout = 3; // seconds the room lives on after the last participant; 0 = default
   uint32 max_participants = 4; // 0 = unlimited
   string metadata = 5;
+  uint32 dvr_window = 6; // seconds of history viewers can rewind; 0 = the server default
 }
 
 message CreateRoomResponse {

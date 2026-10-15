@@ -15,6 +15,25 @@ go run ./cmd/moqit token -room demo -identity bob -sources microphone
 
 In production, pass `-keys key:secret` and `-cert`/`-key`. `-max-viewers` caps viewer sessions on a node, `-edge` makes it an edge node and `-tier` places an edge in a cascade (see [clustering.md](clustering.md#edge-nodes-and-viewers)). The certificate files are re-read when they change, so a renewed certificate (e.g. from an ACME client) needs no restart; until they exist the server waits for them. Run `moqit-server -h` for all flags.
 
+### Rewind (DVR)
+
+With `-dvr-dir`, a node records the rooms that keep history, and their viewers can rewind them (see [protocol.md](protocol.md#rewind)):
+
+| Flag | Default | |
+|---|---|---|
+| `-dvr-dir` | (off) | where recordings are stored (env `MOQIT_DVR_DIR`); the store survives restarts |
+| `-dvr-window` | `0` | history kept by rooms created without a `dvr_window`, e.g. by their first participant; 0 keeps none |
+| `-dvr-max-window` | `6h` | the most a room may keep |
+| `-dvr-max-bytes` | `0` | disk cap; the oldest segments go first; 0 is no cap |
+| `-dvr-max-height` | `720` | the video rendition recorded: the largest at most this high |
+| `-dvr-fetch-limit` | `4` | concurrent FETCHes per viewer; applies on edges too, with or without `-dvr-dir` |
+
+```sh
+go run ./cmd/moqit-server -dev -dvr-dir /var/lib/moqit/dvr -dvr-window 1h
+```
+
+Disk use follows the recorded bitrates: with the browser's 720p camera layer (1.7 Mbps) and microphone, about 0.8 GB per participant-hour (an estimate from the bitrates, not a measurement). Old history is deleted every 30 seconds.
+
 ## Access tokens
 
 Tokens are HS256 JWTs signed with an API secret: `iss` is the API key, `sub` the participant identity, and `grants.room` holds the permissions (`join`, `room`, `publish`, `subscribe`, `publishData`, `publishSources`, `updateOwnMetadata`, `hidden`, `viewer`, and `create` / `list` / `admin` for the server API).
@@ -69,6 +88,12 @@ res, err := rooms.ListParticipants(ctx, connect.NewRequest(&moqitv1.ListParticip
 - `SendData` delivers to participants' inboxes, from the server.
 - `DeleteRoom` disconnects everyone.
 - `Room.num_viewers` counts the room's viewers on every node. It is refreshed every few seconds; viewers are not participants.
+- `CreateRoom` takes `dvr_window`: seconds of history the room keeps for viewers to rewind. 0 means the server's `-dvr-window`, and the value is capped at `-dvr-max-window`. `Room.dvr_window` reports it. It is fixed when the room is created, and is 0 on a server without `-dvr-dir`.
+
+```sh
+curl -XPOST localhost:7880/moqit.v1.RoomService/CreateRoom -H "Authorization: Bearer $TOK" \
+  -H 'Content-Type: application/json' -d '{"name":"town-hall","dvrWindow":7200}'
+```
 
 ## Webhooks
 

@@ -660,6 +660,7 @@ type InboxMessage struct {
 	//	*InboxMessage_Data
 	//	*InboxMessage_RefreshToken
 	//	*InboxMessage_MuteTrack
+	//	*InboxMessage_SendFeedback
 	Message       isInboxMessage_Message `protobuf_oneof:"message"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -738,6 +739,15 @@ func (x *InboxMessage) GetMuteTrack() *MuteTrackCommand {
 	return nil
 }
 
+func (x *InboxMessage) GetSendFeedback() *SendFeedback {
+	if x != nil {
+		if x, ok := x.Message.(*InboxMessage_SendFeedback); ok {
+			return x.SendFeedback
+		}
+	}
+	return nil
+}
+
 type isInboxMessage_Message interface {
 	isInboxMessage_Message()
 }
@@ -758,6 +768,10 @@ type InboxMessage_MuteTrack struct {
 	MuteTrack *MuteTrackCommand `protobuf:"bytes,4,opt,name=mute_track,json=muteTrack,proto3,oneof"` // the server asks the participant to (un)mute a track
 }
 
+type InboxMessage_SendFeedback struct {
+	SendFeedback *SendFeedback `protobuf:"bytes,5,opt,name=send_feedback,json=sendFeedback,proto3,oneof"` // how the participant's media is arriving, every half second while it sends
+}
+
 func (*InboxMessage_Response) isInboxMessage_Message() {}
 
 func (*InboxMessage_Data) isInboxMessage_Message() {}
@@ -765,6 +779,62 @@ func (*InboxMessage_Data) isInboxMessage_Message() {}
 func (*InboxMessage_RefreshToken) isInboxMessage_Message() {}
 
 func (*InboxMessage_MuteTrack) isInboxMessage_Message() {}
+
+func (*InboxMessage_SendFeedback) isInboxMessage_Message() {}
+
+// How a participant's media reaches the server, for the SDK to fit what it
+// sends to its uplink.
+type SendFeedback struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	QueuingDelayMs uint32                 `protobuf:"varint,1,opt,name=queuing_delay_ms,json=queuingDelayMs,proto3" json:"queuing_delay_ms,omitempty"` // one-way delay over the lowest seen in the last two minutes
+	ReceiveBitrate uint32                 `protobuf:"varint,2,opt,name=receive_bitrate,json=receiveBitrate,proto3" json:"receive_bitrate,omitempty"`   // media received from the participant, bits per second
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SendFeedback) Reset() {
+	*x = SendFeedback{}
+	mi := &file_moqit_v1_signal_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendFeedback) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendFeedback) ProtoMessage() {}
+
+func (x *SendFeedback) ProtoReflect() protoreflect.Message {
+	mi := &file_moqit_v1_signal_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendFeedback.ProtoReflect.Descriptor instead.
+func (*SendFeedback) Descriptor() ([]byte, []int) {
+	return file_moqit_v1_signal_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SendFeedback) GetQueuingDelayMs() uint32 {
+	if x != nil {
+		return x.QueuingDelayMs
+	}
+	return 0
+}
+
+func (x *SendFeedback) GetReceiveBitrate() uint32 {
+	if x != nil {
+		return x.ReceiveBitrate
+	}
+	return 0
+}
 
 type MuteTrackCommand struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -776,7 +846,7 @@ type MuteTrackCommand struct {
 
 func (x *MuteTrackCommand) Reset() {
 	*x = MuteTrackCommand{}
-	mi := &file_moqit_v1_signal_proto_msgTypes[9]
+	mi := &file_moqit_v1_signal_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -788,7 +858,7 @@ func (x *MuteTrackCommand) String() string {
 func (*MuteTrackCommand) ProtoMessage() {}
 
 func (x *MuteTrackCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_moqit_v1_signal_proto_msgTypes[9]
+	mi := &file_moqit_v1_signal_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -801,7 +871,7 @@ func (x *MuteTrackCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MuteTrackCommand.ProtoReflect.Descriptor instead.
 func (*MuteTrackCommand) Descriptor() ([]byte, []int) {
-	return file_moqit_v1_signal_proto_rawDescGZIP(), []int{9}
+	return file_moqit_v1_signal_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *MuteTrackCommand) GetTrackSid() string {
@@ -829,7 +899,7 @@ type RequestResponse struct {
 
 func (x *RequestResponse) Reset() {
 	*x = RequestResponse{}
-	mi := &file_moqit_v1_signal_proto_msgTypes[10]
+	mi := &file_moqit_v1_signal_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -841,7 +911,7 @@ func (x *RequestResponse) String() string {
 func (*RequestResponse) ProtoMessage() {}
 
 func (x *RequestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_moqit_v1_signal_proto_msgTypes[10]
+	mi := &file_moqit_v1_signal_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -854,7 +924,7 @@ func (x *RequestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestResponse.ProtoReflect.Descriptor instead.
 func (*RequestResponse) Descriptor() ([]byte, []int) {
-	return file_moqit_v1_signal_proto_rawDescGZIP(), []int{10}
+	return file_moqit_v1_signal_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RequestResponse) GetRequestId() uint64 {
@@ -889,7 +959,7 @@ type DataReceived struct {
 
 func (x *DataReceived) Reset() {
 	*x = DataReceived{}
-	mi := &file_moqit_v1_signal_proto_msgTypes[11]
+	mi := &file_moqit_v1_signal_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -901,7 +971,7 @@ func (x *DataReceived) String() string {
 func (*DataReceived) ProtoMessage() {}
 
 func (x *DataReceived) ProtoReflect() protoreflect.Message {
-	mi := &file_moqit_v1_signal_proto_msgTypes[11]
+	mi := &file_moqit_v1_signal_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -914,7 +984,7 @@ func (x *DataReceived) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataReceived.ProtoReflect.Descriptor instead.
 func (*DataReceived) Descriptor() ([]byte, []int) {
-	return file_moqit_v1_signal_proto_rawDescGZIP(), []int{11}
+	return file_moqit_v1_signal_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DataReceived) GetFromIdentity() string {
@@ -950,7 +1020,7 @@ type DataPacket struct {
 
 func (x *DataPacket) Reset() {
 	*x = DataPacket{}
-	mi := &file_moqit_v1_signal_proto_msgTypes[12]
+	mi := &file_moqit_v1_signal_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -962,7 +1032,7 @@ func (x *DataPacket) String() string {
 func (*DataPacket) ProtoMessage() {}
 
 func (x *DataPacket) ProtoReflect() protoreflect.Message {
-	mi := &file_moqit_v1_signal_proto_msgTypes[12]
+	mi := &file_moqit_v1_signal_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -975,7 +1045,7 @@ func (x *DataPacket) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataPacket.ProtoReflect.Descriptor instead.
 func (*DataPacket) Descriptor() ([]byte, []int) {
-	return file_moqit_v1_signal_proto_rawDescGZIP(), []int{12}
+	return file_moqit_v1_signal_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *DataPacket) GetTopic() string {
@@ -1039,14 +1109,18 @@ const file_moqit_v1_signal_proto_rawDesc = "" +
 	"\bSendData\x125\n" +
 	"\x16destination_identities\x18\x01 \x03(\tR\x15destinationIdentities\x12\x14\n" +
 	"\x05topic\x18\x02 \x01(\tR\x05topic\x12\x18\n" +
-	"\apayload\x18\x03 \x01(\fR\apayload\"\xe4\x01\n" +
+	"\apayload\x18\x03 \x01(\fR\apayload\"\xa3\x02\n" +
 	"\fInboxMessage\x127\n" +
 	"\bresponse\x18\x01 \x01(\v2\x19.moqit.v1.RequestResponseH\x00R\bresponse\x12,\n" +
 	"\x04data\x18\x02 \x01(\v2\x16.moqit.v1.DataReceivedH\x00R\x04data\x12%\n" +
 	"\rrefresh_token\x18\x03 \x01(\tH\x00R\frefreshToken\x12;\n" +
 	"\n" +
-	"mute_track\x18\x04 \x01(\v2\x1a.moqit.v1.MuteTrackCommandH\x00R\tmuteTrackB\t\n" +
-	"\amessage\"E\n" +
+	"mute_track\x18\x04 \x01(\v2\x1a.moqit.v1.MuteTrackCommandH\x00R\tmuteTrack\x12=\n" +
+	"\rsend_feedback\x18\x05 \x01(\v2\x16.moqit.v1.SendFeedbackH\x00R\fsendFeedbackB\t\n" +
+	"\amessage\"a\n" +
+	"\fSendFeedback\x12(\n" +
+	"\x10queuing_delay_ms\x18\x01 \x01(\rR\x0equeuingDelayMs\x12'\n" +
+	"\x0freceive_bitrate\x18\x02 \x01(\rR\x0ereceiveBitrate\"E\n" +
 	"\x10MuteTrackCommand\x12\x1b\n" +
 	"\ttrack_sid\x18\x01 \x01(\tR\btrackSid\x12\x14\n" +
 	"\x05muted\x18\x02 \x01(\bR\x05muted\"{\n" +
@@ -1083,7 +1157,7 @@ func file_moqit_v1_signal_proto_rawDescGZIP() []byte {
 }
 
 var file_moqit_v1_signal_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_moqit_v1_signal_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_moqit_v1_signal_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_moqit_v1_signal_proto_goTypes = []any{
 	(RequestResult)(0),        // 0: moqit.v1.RequestResult
 	(*RoomStateUpdate)(nil),   // 1: moqit.v1.RoomStateUpdate
@@ -1095,42 +1169,44 @@ var file_moqit_v1_signal_proto_goTypes = []any{
 	(*SetTracks)(nil),         // 7: moqit.v1.SetTracks
 	(*SendData)(nil),          // 8: moqit.v1.SendData
 	(*InboxMessage)(nil),      // 9: moqit.v1.InboxMessage
-	(*MuteTrackCommand)(nil),  // 10: moqit.v1.MuteTrackCommand
-	(*RequestResponse)(nil),   // 11: moqit.v1.RequestResponse
-	(*DataReceived)(nil),      // 12: moqit.v1.DataReceived
-	(*DataPacket)(nil),        // 13: moqit.v1.DataPacket
-	nil,                       // 14: moqit.v1.UpdateParticipant.AttributesEntry
-	(*ParticipantInfo)(nil),   // 15: moqit.v1.ParticipantInfo
-	(*Room)(nil),              // 16: moqit.v1.Room
-	(*SpeakerInfo)(nil),       // 17: moqit.v1.SpeakerInfo
-	(DisconnectReason)(0),     // 18: moqit.v1.DisconnectReason
-	(*TrackInfo)(nil),         // 19: moqit.v1.TrackInfo
+	(*SendFeedback)(nil),      // 10: moqit.v1.SendFeedback
+	(*MuteTrackCommand)(nil),  // 11: moqit.v1.MuteTrackCommand
+	(*RequestResponse)(nil),   // 12: moqit.v1.RequestResponse
+	(*DataReceived)(nil),      // 13: moqit.v1.DataReceived
+	(*DataPacket)(nil),        // 14: moqit.v1.DataPacket
+	nil,                       // 15: moqit.v1.UpdateParticipant.AttributesEntry
+	(*ParticipantInfo)(nil),   // 16: moqit.v1.ParticipantInfo
+	(*Room)(nil),              // 17: moqit.v1.Room
+	(*SpeakerInfo)(nil),       // 18: moqit.v1.SpeakerInfo
+	(DisconnectReason)(0),     // 19: moqit.v1.DisconnectReason
+	(*TrackInfo)(nil),         // 20: moqit.v1.TrackInfo
 }
 var file_moqit_v1_signal_proto_depIdxs = []int32{
 	2,  // 0: moqit.v1.RoomStateUpdate.snapshot:type_name -> moqit.v1.RoomSnapshot
-	15, // 1: moqit.v1.RoomStateUpdate.participant_updated:type_name -> moqit.v1.ParticipantInfo
+	16, // 1: moqit.v1.RoomStateUpdate.participant_updated:type_name -> moqit.v1.ParticipantInfo
 	3,  // 2: moqit.v1.RoomStateUpdate.participant_left:type_name -> moqit.v1.ParticipantLeft
-	16, // 3: moqit.v1.RoomStateUpdate.room_updated:type_name -> moqit.v1.Room
+	17, // 3: moqit.v1.RoomStateUpdate.room_updated:type_name -> moqit.v1.Room
 	4,  // 4: moqit.v1.RoomStateUpdate.speakers_changed:type_name -> moqit.v1.SpeakersChanged
-	16, // 5: moqit.v1.RoomSnapshot.room:type_name -> moqit.v1.Room
-	15, // 6: moqit.v1.RoomSnapshot.participants:type_name -> moqit.v1.ParticipantInfo
-	17, // 7: moqit.v1.RoomSnapshot.speakers:type_name -> moqit.v1.SpeakerInfo
-	18, // 8: moqit.v1.ParticipantLeft.reason:type_name -> moqit.v1.DisconnectReason
-	17, // 9: moqit.v1.SpeakersChanged.speakers:type_name -> moqit.v1.SpeakerInfo
+	17, // 5: moqit.v1.RoomSnapshot.room:type_name -> moqit.v1.Room
+	16, // 6: moqit.v1.RoomSnapshot.participants:type_name -> moqit.v1.ParticipantInfo
+	18, // 7: moqit.v1.RoomSnapshot.speakers:type_name -> moqit.v1.SpeakerInfo
+	19, // 8: moqit.v1.ParticipantLeft.reason:type_name -> moqit.v1.DisconnectReason
+	18, // 9: moqit.v1.SpeakersChanged.speakers:type_name -> moqit.v1.SpeakerInfo
 	6,  // 10: moqit.v1.ClientSignal.update_participant:type_name -> moqit.v1.UpdateParticipant
 	7,  // 11: moqit.v1.ClientSignal.set_tracks:type_name -> moqit.v1.SetTracks
 	8,  // 12: moqit.v1.ClientSignal.send_data:type_name -> moqit.v1.SendData
-	14, // 13: moqit.v1.UpdateParticipant.attributes:type_name -> moqit.v1.UpdateParticipant.AttributesEntry
-	19, // 14: moqit.v1.SetTracks.tracks:type_name -> moqit.v1.TrackInfo
-	11, // 15: moqit.v1.InboxMessage.response:type_name -> moqit.v1.RequestResponse
-	12, // 16: moqit.v1.InboxMessage.data:type_name -> moqit.v1.DataReceived
-	10, // 17: moqit.v1.InboxMessage.mute_track:type_name -> moqit.v1.MuteTrackCommand
-	0,  // 18: moqit.v1.RequestResponse.result:type_name -> moqit.v1.RequestResult
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	15, // 13: moqit.v1.UpdateParticipant.attributes:type_name -> moqit.v1.UpdateParticipant.AttributesEntry
+	20, // 14: moqit.v1.SetTracks.tracks:type_name -> moqit.v1.TrackInfo
+	12, // 15: moqit.v1.InboxMessage.response:type_name -> moqit.v1.RequestResponse
+	13, // 16: moqit.v1.InboxMessage.data:type_name -> moqit.v1.DataReceived
+	11, // 17: moqit.v1.InboxMessage.mute_track:type_name -> moqit.v1.MuteTrackCommand
+	10, // 18: moqit.v1.InboxMessage.send_feedback:type_name -> moqit.v1.SendFeedback
+	0,  // 19: moqit.v1.RequestResponse.result:type_name -> moqit.v1.RequestResult
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_moqit_v1_signal_proto_init() }
@@ -1157,6 +1233,7 @@ func file_moqit_v1_signal_proto_init() {
 		(*InboxMessage_Data)(nil),
 		(*InboxMessage_RefreshToken)(nil),
 		(*InboxMessage_MuteTrack)(nil),
+		(*InboxMessage_SendFeedback)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1164,7 +1241,7 @@ func file_moqit_v1_signal_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_moqit_v1_signal_proto_rawDesc), len(file_moqit_v1_signal_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

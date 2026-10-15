@@ -8,6 +8,7 @@ import {
   type RemoteVideoTrack,
   type RoomEvents,
   Room,
+  type Timeline,
   TrackSource,
 } from "@moqit/client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState } from "react";
@@ -25,7 +26,7 @@ const roomEvents: (keyof RoomEvents)[] = [
   "participantMetadataChanged", "participantNameChanged", "participantAttributesChanged", "trackPublished",
   "trackUnpublished", "trackSubscribed", "trackUnsubscribed", "trackMuted", "trackUnmuted",
   "localTrackPublished", "localTrackUnpublished", "localTrackMutedByServer", "roomMetadataChanged", "activeSpeakersChanged",
-  "activeDeviceChanged", "viewerCountChanged",
+  "activeDeviceChanged", "viewerCountChanged", "timelineChanged",
 ];
 
 /** Re-renders whenever the room's state changes; read the Room directly. */
@@ -227,4 +228,16 @@ export function useActiveDevice(kind: MediaDeviceKind): { deviceId: string | und
   useRoomUpdates(room);
   const setActiveDevice = useCallback((id: string) => room.switchActiveDevice(kind, id), [room, kind]);
   return { deviceId: room.getActiveDevice(kind), setActiveDevice };
+}
+
+/** A viewer's place in the room's history (Room.seek); refreshed every second. */
+export function useTimeline(): Timeline {
+  const room = useRoom();
+  useRoomUpdates(room);
+  const [, tick] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, []);
+  return room.timeline;
 }

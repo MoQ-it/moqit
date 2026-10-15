@@ -21,6 +21,7 @@ It comes with a browser SDK, React components, a server API with webhooks, a Go 
 - **Camera, microphone and screen sharing** (with tab or system audio), encoded with WebCodecs
 - **Simulcast** — up to three layers per camera, each encoded only while someone watches it
 - **Adaptive stream** — each viewer receives the layer that fits its video's size, and pauses hidden video
+- **Send-side adaptation** — publishers lower bitrates and layers when their uplink can't keep up, using delay measured by the server
 - **Send and receive quality control** — 180p to 1080p, switched live
 - **Lip-synced playout** with a jitter buffer; active speaker detection on the server
 - **Reliable and lossy data** to everyone or to specific participants, and room chat
@@ -30,6 +31,7 @@ It comes with a browser SDK, React components, a server API with webhooks, a Go 
 - **Go participant client** to join rooms and publish media from Go services
 - **Clustering** — a room can span nodes; Redis for state, MoQ between nodes
 - **Edge nodes** — read-only viewers served from edges for large audiences, with a load generator
+- **Rewind** — viewers can scrub back through a meeting's recent history and return to live
 - **Meet** — a complete conferencing app with chat, presenting, pinning, effects, devices and stats
 - **RTMP ingress** — stream from OBS into a room, transcoded into quality layers and stereo Opus ([moqit-ingress](https://github.com/MoQ-it/moqit-ingress))
 

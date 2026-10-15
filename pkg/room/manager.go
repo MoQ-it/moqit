@@ -17,6 +17,7 @@ import (
 
 	"github.com/MoQ-it/moqit/pkg/auth"
 	"github.com/MoQ-it/moqit/pkg/cluster"
+	"github.com/MoQ-it/moqit/pkg/dvr"
 	"github.com/MoQ-it/moqit/pkg/webhook"
 	moqitv1 "github.com/MoQ-it/moqit/proto/moqit/v1"
 	"github.com/MoQ-it/moqt"
@@ -66,6 +67,19 @@ type Config struct {
 	// ViewerInterval is how often viewer counts are shared and published
 	// (default 5s).
 	ViewerInterval time.Duration
+
+	// DVR, if set, records rooms that keep history so viewers can rewind.
+	DVR *dvr.Store
+	// DVRWindow is the history window of rooms created without one; 0
+	// leaves history off unless CreateRoom asks for it.
+	DVRWindow time.Duration
+	// DVRMaxWindow caps a room's history window; 0 = no cap.
+	DVRMaxWindow time.Duration
+	// DVRMaxHeight picks the video rendition recorded per source: the
+	// largest at most this high (0 = the largest).
+	DVRMaxHeight int
+	// DVRFetchLimit caps a viewer's concurrent FETCHes; 0 = no cap.
+	DVRFetchLimit int
 }
 
 // Notifier receives webhook events; *webhook.Notifier implements it.
@@ -130,6 +144,9 @@ type Manager struct {
 
 	missMu sync.Mutex
 	misses map[string]time.Time // failed upstream lookups by namespace
+
+	recMu sync.Mutex
+	recs  map[recKey]*recording // DVR recordings of local participants
 }
 
 // New creates a Manager and the relay it authorizes. Serve every incoming
@@ -160,11 +177,15 @@ func New(cfg Config) *Manager {
 		cfg.NodeID = newID("ND_")
 	}
 	m := &Manager{cfg: cfg, log: cfg.Logger, rooms: map[string]*Room{}, started: make(chan struct{}), peers: map[string]*peerSession{},
-		viewerRooms: map[string]int{}, misses: map[string]time.Time{}}
+		viewerRooms: map[string]int{}, misses: map[string]time.Time{}, recs: map[recKey]*recording{}}
 	rc := relay.Config{Authorizer: m, NamespaceHook: m.onNamespace, ObjectHook: m.onObject, Logger: cfg.Logger}
 	if cfg.Cluster != nil {
 		rc.Upstream = m
 	}
+	if cfg.DVR != nil {
+		rc.Archive = m
+	}
+	rc.FetchLimit = m.fetchLimit
 	m.relay = relay.New(rc)
 	return m
 }
@@ -205,6 +226,9 @@ func (m *Manager) Start(ctx context.Context, dial func(context.Context) (moqt.Co
 		go c.RunHeartbeat(ctx, m.nodeInfo)
 		go m.reapLoop(ctx)
 		go m.syncViewers(ctx)
+	}
+	if m.cfg.DVR != nil {
+		go m.dvrLoop(ctx)
 	}
 	close(m.started)
 	return nil
@@ -653,6 +677,8 @@ func (m *Manager) AuthorizeSubscribe(peer *relay.Peer, track v22.FullTrackName, 
 			return denied("signal tracks are read by the server only")
 		case classUnknown:
 			return &moqt.RequestError{Code: v22.ReqErrDoesNotExist, Reason: "unknown track name"}
+		case classDvr:
+			return &moqt.RequestError{Code: v22.ReqErrDoesNotExist, Reason: "the dvr track is fetch-only"}
 		}
 		if p != nil && !p.permission().CanSubscribe {
 			return denied("no subscribe permission")

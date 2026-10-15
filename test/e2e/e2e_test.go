@@ -22,6 +22,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/MoQ-it/moqit/pkg/auth"
 	"github.com/MoQ-it/moqit/pkg/cluster"
+	"github.com/MoQ-it/moqit/pkg/dvr"
 	"github.com/MoQ-it/moqit/pkg/server"
 	moqitv1 "github.com/MoQ-it/moqit/proto/moqit/v1"
 	moqit "github.com/MoQ-it/moqit/sdk/go"
@@ -39,6 +40,7 @@ type result struct {
 	High    string   `json:"highSize"`
 	Low     string   `json:"lowSize"`
 	Latency string   `json:"latency"`
+	Rewind  string   `json:"rewind"`
 }
 
 type launcher func(url, dir string) *exec.Cmd
@@ -49,7 +51,21 @@ func chrome(t *testing.T) launcher {
 		t.Skip("google-chrome not installed")
 	}
 	return func(url, dir string) *exec.Cmd {
-		return exec.Command(bin, "--headless=new", "--no-sandbox", "--user-data-dir="+filepath.Join(dir, "chrome"),
+		// Chrome's helpers can outlive the killed browser and keep writing
+		// here, so the profile is not under t.TempDir, whose removal fails.
+		prof, err := os.MkdirTemp("", "moqit-e2e-chrome-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			for range 10 {
+				if os.RemoveAll(prof) == nil {
+					return
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+		})
+		return exec.Command(bin, "--headless=new", "--no-sandbox", "--user-data-dir="+prof,
 			"--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required", url)
 	}
 }
@@ -121,6 +137,13 @@ func node(t *testing.T, ctx context.Context, rdb *redis.Client, id string, edge 
 	}
 	cfg := server.Config{UDPAddr: "127.0.0.1:0", Keys: auth.KeyProvider{apiKey: apiSecret}, Certificate: cert,
 		ViewerInterval: 500 * time.Millisecond, Edge: edge}
+	if !edge {
+		store, err := dvr.Open(dvr.Config{Dir: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.DVR, cfg.DVRWindow, cfg.DVRMaxHeight, cfg.DVRFetchLimit = store, 10*time.Minute, 720, 8
+	}
 	if rdb != nil {
 		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 		if err != nil {
@@ -143,14 +166,6 @@ func node(t *testing.T, ctx context.Context, rdb *redis.Client, id string, edge 
 func run(t *testing.T, browser launcher, clustered bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	dir := t.TempDir()
-
-	bundle := filepath.Join(dir, "page.js")
-	esbuild := exec.Command("npx", "esbuild", "../test/e2e/page.ts", "--bundle", "--format=esm", "--outfile="+bundle)
-	esbuild.Dir = "../../web"
-	if out, err := esbuild.CombinedOutput(); err != nil {
-		t.Fatalf("esbuild: %v\n%s", err, out)
-	}
 
 	var aliceNode, bobNode, carolNode *server.Server
 	if clustered {
@@ -162,15 +177,7 @@ func run(t *testing.T, browser launcher, clustered bool) {
 		bobNode, carolNode = aliceNode, aliceNode
 	}
 
-	results := make(chan result, 1)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `<!doctype html><meta charset="utf-8"><body><script type="module" src="/page.js"></script>`)
-	})
-	mux.HandleFunc("/page.js", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/javascript")
-		http.ServeFile(w, r, bundle)
-	})
 	mux.HandleFunc("/config", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{
 			"aliceUrl":      "https://127.0.0.1:" + aliceNode.Port() + "/moq",
@@ -194,11 +201,41 @@ func run(t *testing.T, browser launcher, clustered bool) {
 			http.Error(w, err.Error(), 500)
 		}
 	})
+	var res result
+	browse(ctx, t, browser, "page.ts", mux, &res)
+	t.Logf("browser: %s", res.UA)
+	for _, s := range res.Steps {
+		t.Logf("  %s", s)
+	}
+	if !res.OK {
+		t.Fatalf("browser failed: %s", res.Error)
+	}
+	t.Logf("video high %s, low %s; %s", res.High, res.Low, res.Latency)
+	t.Logf("rewind: %s", res.Rewind)
+}
+
+// browse bundles a page from this directory, serves it with mux's
+// handlers, opens it in the browser and decodes what it posts to /result.
+func browse(ctx context.Context, t *testing.T, browser launcher, page string, mux *http.ServeMux, res any) {
+	t.Helper()
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "page.js")
+	esbuild := exec.Command("npx", "esbuild", "../test/e2e/"+page, "--bundle", "--format=esm", "--outfile="+bundle)
+	esbuild.Dir = "../../web"
+	if out, err := esbuild.CombinedOutput(); err != nil {
+		t.Fatalf("esbuild: %v\n%s", err, out)
+	}
+	results := make(chan []byte, 1)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<!doctype html><meta charset="utf-8"><body><script type="module" src="/page.js"></script>`)
+	})
+	mux.HandleFunc("/page.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript")
+		http.ServeFile(w, r, bundle)
+	})
 	mux.HandleFunc("/result", func(w http.ResponseWriter, r *http.Request) {
-		var res result
 		b, _ := io.ReadAll(r.Body)
-		json.Unmarshal(b, &res)
-		results <- res
+		results <- b
 	})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -214,17 +251,11 @@ func run(t *testing.T, browser launcher, clustered bool) {
 		t.Fatal(err)
 	}
 	defer cmd.Process.Kill()
-
 	select {
-	case res := <-results:
-		t.Logf("browser: %s", res.UA)
-		for _, s := range res.Steps {
-			t.Logf("  %s", s)
+	case b := <-results:
+		if err := json.Unmarshal(b, res); err != nil {
+			t.Fatalf("result %s: %v", b, err)
 		}
-		if !res.OK {
-			t.Fatalf("browser failed: %s", res.Error)
-		}
-		t.Logf("video high %s, low %s; %s", res.High, res.Low, res.Latency)
 	case <-ctx.Done():
 		t.Fatal("no result from the browser")
 	}

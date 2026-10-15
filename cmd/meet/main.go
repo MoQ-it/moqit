@@ -27,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/MoQ-it/moqit/pkg/auth"
+	"github.com/MoQ-it/moqit/pkg/dvr"
 	"github.com/MoQ-it/moqit/pkg/server"
 )
 
@@ -38,15 +39,25 @@ func main() {
 	nodeURL := flag.String("node-url", os.Getenv("MOQIT_URL"), "WebTransport URL of the moqit node, e.g. https://moq.example.com:4443/moq (env MOQIT_URL)")
 	apiKey := flag.String("key", envOr("MOQIT_API_KEY", "devkey"), "API key (env MOQIT_API_KEY)")
 	apiSecret := flag.String("secret", os.Getenv("MOQIT_API_SECRET"), "API secret (env MOQIT_API_SECRET)")
+	dvrDir := flag.String("dvr-dir", "", "-dev: record rooms here so viewers can rewind; empty = off")
+	dvrWindow := flag.Duration("dvr-window", time.Hour, "-dev: how far back viewers can rewind, with -dvr-dir")
 	routeURL = flag.String("route-url", os.Getenv("MOQIT_ROUTE_URL"), "a node's /v1/route endpoint; when set, each meeting goes to the node the cluster picks (env MOQIT_ROUTE_URL)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	dvrOpts = dvrOptions{*dvrDir, *dvrWindow}
 	if err := run(log, *addr, *static, *dev, *udp, *nodeURL, *apiKey, *apiSecret); err != nil {
 		log.Error("meet", "err", err)
 		os.Exit(1)
 	}
 }
+
+type dvrOptions struct {
+	dir    string
+	window time.Duration
+}
+
+var dvrOpts dvrOptions
 
 func run(log *slog.Logger, addr, static string, dev bool, udp, nodeURL, apiKey, apiSecret string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -61,7 +72,14 @@ func run(log *slog.Logger, addr, static string, dev bool, udp, nodeURL, apiKey, 
 		if err != nil {
 			return err
 		}
-		srv, err := server.Start(ctx, server.Config{UDPAddr: udp, Keys: auth.KeyProvider{apiKey: apiSecret}, Certificate: cert, Logger: log})
+		cfg := server.Config{UDPAddr: udp, Keys: auth.KeyProvider{apiKey: apiSecret}, Certificate: cert, Logger: log}
+		if dvrOpts.dir != "" {
+			if cfg.DVR, err = dvr.Open(dvr.Config{Dir: dvrOpts.dir, Logger: log}); err != nil {
+				return err
+			}
+			cfg.DVRWindow, cfg.DVRMaxWindow, cfg.DVRMaxHeight, cfg.DVRFetchLimit = dvrOpts.window, dvrOpts.window, 720, 4
+		}
+		srv, err := server.Start(ctx, cfg)
 		if err != nil {
 			return err
 		}

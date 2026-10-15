@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file moqit/v1/models.proto.
  */
 export const file_moqit_v1_models: GenFile = /*@__PURE__*/
-  fileDesc("ChVtb3FpdC92MS9tb2RlbHMucHJvdG8SCG1vcWl0LnYxIsIBCgRSb29tEgsKA3NpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhAKCG1ldGFkYXRhGAMgASgJEhUKDWVtcHR5X3RpbWVvdXQYBCABKA0SGQoRZGVwYXJ0dXJlX3RpbWVvdXQYBSABKA0SGAoQbWF4X3BhcnRpY2lwYW50cxgGIAEoDRIYChBudW1fcGFydGljaXBhbnRzGAcgASgNEhIKCmNyZWF0ZWRfYXQYCCABKAMSEwoLbnVtX3ZpZXdlcnMYCSABKA0iYgoJUmVuZGl0aW9uEhIKCnRyYWNrX25hbWUYASABKAkSDQoFd2lkdGgYAiABKA0SDgoGaGVpZ2h0GAMgASgNEg8KB2JpdHJhdGUYBCABKA0SEQoJZnJhbWVyYXRlGAUgASgNIskBCglUcmFja0luZm8SCwoDc2lkGAEgASgJEiEKBGtpbmQYAiABKA4yEy5tb3FpdC52MS5UcmFja0tpbmQSJQoGc291cmNlGAMgASgOMhUubW9xaXQudjEuVHJhY2tTb3VyY2USDAoEbmFtZRgEIAEoCRINCgVtdXRlZBgFIAEoCBINCgVjb2RlYxgGIAEoCRInCgpyZW5kaXRpb25zGAcgAygLMhMubW9xaXQudjEuUmVuZGl0aW9uEhAKCGNoYW5uZWxzGAggASgNIr4BChVQYXJ0aWNpcGFudFBlcm1pc3Npb24SFQoNY2FuX3N1YnNjcmliZRgBIAEoCBITCgtjYW5fcHVibGlzaBgCIAEoCBIYChBjYW5fcHVibGlzaF9kYXRhGAMgASgIEjIKE2Nhbl9wdWJsaXNoX3NvdXJjZXMYBCADKA4yFS5tb3FpdC52MS5UcmFja1NvdXJjZRIbChNjYW5fdXBkYXRlX21ldGFkYXRhGAUgASgIEg4KBmhpZGRlbhgGIAEoCCLrAgoPUGFydGljaXBhbnRJbmZvEgsKA3NpZBgBIAEoCRIQCghpZGVudGl0eRgCIAEoCRIMCgRuYW1lGAMgASgJEikKBXN0YXRlGAQgASgOMhoubW9xaXQudjEuUGFydGljaXBhbnRTdGF0ZRIQCghtZXRhZGF0YRgFIAEoCRI9CgphdHRyaWJ1dGVzGAYgAygLMikubW9xaXQudjEuUGFydGljaXBhbnRJbmZvLkF0dHJpYnV0ZXNFbnRyeRIzCgpwZXJtaXNzaW9uGAcgASgLMh8ubW9xaXQudjEuUGFydGljaXBhbnRQZXJtaXNzaW9uEiMKBnRyYWNrcxgIIAMoCzITLm1vcWl0LnYxLlRyYWNrSW5mbxIRCglqb2luZWRfYXQYCSABKAMSDwoHbm9kZV9pZBgKIAEoCRoxCg9BdHRyaWJ1dGVzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASIuCgtTcGVha2VySW5mbxIQCghpZGVudGl0eRgBIAEoCRINCgVsZXZlbBgCIAEoAipTCglUcmFja0tpbmQSGgoWVFJBQ0tfS0lORF9VTlNQRUNJRklFRBAAEhQKEFRSQUNLX0tJTkRfQVVESU8QARIUChBUUkFDS19LSU5EX1ZJREVPEAIqmQEKC1RyYWNrU291cmNlEhwKGFRSQUNLX1NPVVJDRV9VTlNQRUNJRklFRBAAEhcKE1RSQUNLX1NPVVJDRV9DQU1FUkEQARIbChdUUkFDS19TT1VSQ0VfTUlDUk9QSE9ORRACEhcKE1RSQUNLX1NPVVJDRV9TQ1JFRU4QAxIdChlUUkFDS19TT1VSQ0VfU0NSRUVOX0FVRElPEAQqlQEKEFBhcnRpY2lwYW50U3RhdGUSIQodUEFSVElDSVBBTlRfU1RBVEVfVU5TUEVDSUZJRUQQABIcChhQQVJUSUNJUEFOVF9TVEFURV9KT0lORUQQARIcChhQQVJUSUNJUEFOVF9TVEFURV9BQ1RJVkUQAhIiCh5QQVJUSUNJUEFOVF9TVEFURV9ESVNDT05ORUNURUQQAyqkAgoQRGlzY29ubmVjdFJlYXNvbhIhCh1ESVNDT05ORUNUX1JFQVNPTl9VTlNQRUNJRklFRBAAEiYKIkRJU0NPTk5FQ1RfUkVBU09OX0NMSUVOVF9JTklUSUFURUQQARIoCiRESVNDT05ORUNUX1JFQVNPTl9EVVBMSUNBVEVfSURFTlRJVFkQAhIlCiFESVNDT05ORUNUX1JFQVNPTl9TRVJWRVJfU0hVVERPV04QAxIpCiVESVNDT05ORUNUX1JFQVNPTl9QQVJUSUNJUEFOVF9SRU1PVkVEEAQSIgoeRElTQ09OTkVDVF9SRUFTT05fUk9PTV9ERUxFVEVEEAUSJQohRElTQ09OTkVDVF9SRUFTT05fQ09OTkVDVElPTl9MT1NUEAYqsAEKEUNvbm5lY3Rpb25RdWFsaXR5EiIKHkNPTk5FQ1RJT05fUVVBTElUWV9VTlNQRUNJRklFRBAAEhsKF0NPTk5FQ1RJT05fUVVBTElUWV9QT09SEAESGwoXQ09OTkVDVElPTl9RVUFMSVRZX0dPT0QQAhIgChxDT05ORUNUSU9OX1FVQUxJVFlfRVhDRUxMRU5UEAMSGwoXQ09OTkVDVElPTl9RVUFMSVRZX0xPU1QQBEIwWi5naXRodWIuY29tL01vUS1pdC9tb3FpdC9wcm90by9tb3FpdC92MTttb3FpdHYxYgZwcm90bzM");
+  fileDesc("ChVtb3FpdC92MS9tb2RlbHMucHJvdG8SCG1vcWl0LnYxItYBCgRSb29tEgsKA3NpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhAKCG1ldGFkYXRhGAMgASgJEhUKDWVtcHR5X3RpbWVvdXQYBCABKA0SGQoRZGVwYXJ0dXJlX3RpbWVvdXQYBSABKA0SGAoQbWF4X3BhcnRpY2lwYW50cxgGIAEoDRIYChBudW1fcGFydGljaXBhbnRzGAcgASgNEhIKCmNyZWF0ZWRfYXQYCCABKAMSEwoLbnVtX3ZpZXdlcnMYCSABKA0SEgoKZHZyX3dpbmRvdxgKIAEoDSJiCglSZW5kaXRpb24SEgoKdHJhY2tfbmFtZRgBIAEoCRINCgV3aWR0aBgCIAEoDRIOCgZoZWlnaHQYAyABKA0SDwoHYml0cmF0ZRgEIAEoDRIRCglmcmFtZXJhdGUYBSABKA0iyQEKCVRyYWNrSW5mbxILCgNzaWQYASABKAkSIQoEa2luZBgCIAEoDjITLm1vcWl0LnYxLlRyYWNrS2luZBIlCgZzb3VyY2UYAyABKA4yFS5tb3FpdC52MS5UcmFja1NvdXJjZRIMCgRuYW1lGAQgASgJEg0KBW11dGVkGAUgASgIEg0KBWNvZGVjGAYgASgJEicKCnJlbmRpdGlvbnMYByADKAsyEy5tb3FpdC52MS5SZW5kaXRpb24SEAoIY2hhbm5lbHMYCCABKA0ivgEKFVBhcnRpY2lwYW50UGVybWlzc2lvbhIVCg1jYW5fc3Vic2NyaWJlGAEgASgIEhMKC2Nhbl9wdWJsaXNoGAIgASgIEhgKEGNhbl9wdWJsaXNoX2RhdGEYAyABKAgSMgoTY2FuX3B1Ymxpc2hfc291cmNlcxgEIAMoDjIVLm1vcWl0LnYxLlRyYWNrU291cmNlEhsKE2Nhbl91cGRhdGVfbWV0YWRhdGEYBSABKAgSDgoGaGlkZGVuGAYgASgIIusCCg9QYXJ0aWNpcGFudEluZm8SCwoDc2lkGAEgASgJEhAKCGlkZW50aXR5GAIgASgJEgwKBG5hbWUYAyABKAkSKQoFc3RhdGUYBCABKA4yGi5tb3FpdC52MS5QYXJ0aWNpcGFudFN0YXRlEhAKCG1ldGFkYXRhGAUgASgJEj0KCmF0dHJpYnV0ZXMYBiADKAsyKS5tb3FpdC52MS5QYXJ0aWNpcGFudEluZm8uQXR0cmlidXRlc0VudHJ5EjMKCnBlcm1pc3Npb24YByABKAsyHy5tb3FpdC52MS5QYXJ0aWNpcGFudFBlcm1pc3Npb24SIwoGdHJhY2tzGAggAygLMhMubW9xaXQudjEuVHJhY2tJbmZvEhEKCWpvaW5lZF9hdBgJIAEoAxIPCgdub2RlX2lkGAogASgJGjEKD0F0dHJpYnV0ZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIi4KC1NwZWFrZXJJbmZvEhAKCGlkZW50aXR5GAEgASgJEg0KBWxldmVsGAIgASgCIn4KCER2ckluZGV4EhAKCGVhcmxpZXN0GAEgASgDEg4KBmxhdGVzdBgCIAEoAxIiCgZlcG9jaHMYAyADKAsyEi5tb3FpdC52MS5EdnJFcG9jaBIsCgtjaGVja3BvaW50cxgEIAMoCzIXLm1vcWl0LnYxLkR2ckNoZWNrcG9pbnQiaAoIRHZyRXBvY2gSDQoFZXBvY2gYASABKA0SDQoFdHJhY2sYAiABKAkSDQoFY29kZWMYAyABKAkSDQoFd2lkdGgYBCABKA0SDgoGaGVpZ2h0GAUgASgNEhAKCGNoYW5uZWxzGAYgASgNIkYKDUR2ckNoZWNrcG9pbnQSDQoFdHJhY2sYASABKAkSDQoFZ3JvdXAYAiABKAQSCgoCYXQYAyABKAMSCwoDbG9jGAQgASgDKlMKCVRyYWNrS2luZBIaChZUUkFDS19LSU5EX1VOU1BFQ0lGSUVEEAASFAoQVFJBQ0tfS0lORF9BVURJTxABEhQKEFRSQUNLX0tJTkRfVklERU8QAiqZAQoLVHJhY2tTb3VyY2USHAoYVFJBQ0tfU09VUkNFX1VOU1BFQ0lGSUVEEAASFwoTVFJBQ0tfU09VUkNFX0NBTUVSQRABEhsKF1RSQUNLX1NPVVJDRV9NSUNST1BIT05FEAISFwoTVFJBQ0tfU09VUkNFX1NDUkVFThADEh0KGVRSQUNLX1NPVVJDRV9TQ1JFRU5fQVVESU8QBCqVAQoQUGFydGljaXBhbnRTdGF0ZRIhCh1QQVJUSUNJUEFOVF9TVEFURV9VTlNQRUNJRklFRBAAEhwKGFBBUlRJQ0lQQU5UX1NUQVRFX0pPSU5FRBABEhwKGFBBUlRJQ0lQQU5UX1NUQVRFX0FDVElWRRACEiIKHlBBUlRJQ0lQQU5UX1NUQVRFX0RJU0NPTk5FQ1RFRBADKqQCChBEaXNjb25uZWN0UmVhc29uEiEKHURJU0NPTk5FQ1RfUkVBU09OX1VOU1BFQ0lGSUVEEAASJgoiRElTQ09OTkVDVF9SRUFTT05fQ0xJRU5UX0lOSVRJQVRFRBABEigKJERJU0NPTk5FQ1RfUkVBU09OX0RVUExJQ0FURV9JREVOVElUWRACEiUKIURJU0NPTk5FQ1RfUkVBU09OX1NFUlZFUl9TSFVURE9XThADEikKJURJU0NPTk5FQ1RfUkVBU09OX1BBUlRJQ0lQQU5UX1JFTU9WRUQQBBIiCh5ESVNDT05ORUNUX1JFQVNPTl9ST09NX0RFTEVURUQQBRIlCiFESVNDT05ORUNUX1JFQVNPTl9DT05ORUNUSU9OX0xPU1QQBiqwAQoRQ29ubmVjdGlvblF1YWxpdHkSIgoeQ09OTkVDVElPTl9RVUFMSVRZX1VOU1BFQ0lGSUVEEAASGwoXQ09OTkVDVElPTl9RVUFMSVRZX1BPT1IQARIbChdDT05ORUNUSU9OX1FVQUxJVFlfR09PRBACEiAKHENPTk5FQ1RJT05fUVVBTElUWV9FWENFTExFTlQQAxIbChdDT05ORUNUSU9OX1FVQUxJVFlfTE9TVBAEQjBaLmdpdGh1Yi5jb20vTW9RLWl0L21vcWl0L3Byb3RvL21vcWl0L3YxO21vcWl0djFiBnByb3RvMw");
 
 /**
  * A room. Rooms are created on first join (or by the admin API) and deleted
@@ -73,6 +73,13 @@ export type Room = Message<"moqit.v1.Room"> & {
    * @generated from field: uint32 num_viewers = 9;
    */
   numViewers: number;
+
+  /**
+   * seconds of history viewers can rewind; 0 = off
+   *
+   * @generated from field: uint32 dvr_window = 10;
+   */
+  dvrWindow: number;
 };
 
 /**
@@ -319,6 +326,141 @@ export type SpeakerInfo = Message<"moqit.v1.SpeakerInfo"> & {
  */
 export const SpeakerInfoSchema: GenMessage<SpeakerInfo> = /*@__PURE__*/
   messageDesc(file_moqit_v1_models, 5);
+
+/**
+ * One minute of a participant's recorded history, for viewers to seek in.
+ * It is Object 0 of Group <unix minute> of the participant's "dvr" track,
+ * which is fetch-only.
+ *
+ * @generated from message moqit.v1.DvrIndex
+ */
+export type DvrIndex = Message<"moqit.v1.DvrIndex"> & {
+  /**
+   * server time (unix µs) of the oldest stored Object of the participant
+   *
+   * @generated from field: int64 earliest = 1;
+   */
+  earliest: bigint;
+
+  /**
+   * server time (unix µs) of the newest
+   *
+   * @generated from field: int64 latest = 2;
+   */
+  latest: bigint;
+
+  /**
+   * the epochs the checkpoints refer to
+   *
+   * @generated from field: repeated moqit.v1.DvrEpoch epochs = 3;
+   */
+  epochs: DvrEpoch[];
+
+  /**
+   * ordered by at
+   *
+   * @generated from field: repeated moqit.v1.DvrCheckpoint checkpoints = 4;
+   */
+  checkpoints: DvrCheckpoint[];
+};
+
+/**
+ * Describes the message moqit.v1.DvrIndex.
+ * Use `create(DvrIndexSchema)` to create a new message.
+ */
+export const DvrIndexSchema: GenMessage<DvrIndex> = /*@__PURE__*/
+  messageDesc(file_moqit_v1_models, 6);
+
+/**
+ * One continuous recording of a track. Its archive Group IDs are
+ * epoch << 32 | publisher Group.
+ *
+ * @generated from message moqit.v1.DvrEpoch
+ */
+export type DvrEpoch = Message<"moqit.v1.DvrEpoch"> & {
+  /**
+   * @generated from field: uint32 epoch = 1;
+   */
+  epoch: number;
+
+  /**
+   * MoQ track name, e.g. "camera-m"
+   *
+   * @generated from field: string track = 2;
+   */
+  track: string;
+
+  /**
+   * WebCodecs codec string
+   *
+   * @generated from field: string codec = 3;
+   */
+  codec: string;
+
+  /**
+   * @generated from field: uint32 width = 4;
+   */
+  width: number;
+
+  /**
+   * @generated from field: uint32 height = 5;
+   */
+  height: number;
+
+  /**
+   * audio channels; 0 means 1
+   *
+   * @generated from field: uint32 channels = 6;
+   */
+  channels: number;
+};
+
+/**
+ * Describes the message moqit.v1.DvrEpoch.
+ * Use `create(DvrEpochSchema)` to create a new message.
+ */
+export const DvrEpochSchema: GenMessage<DvrEpoch> = /*@__PURE__*/
+  messageDesc(file_moqit_v1_models, 7);
+
+/**
+ * A Group start in the archive: where playback can begin decoding.
+ *
+ * @generated from message moqit.v1.DvrCheckpoint
+ */
+export type DvrCheckpoint = Message<"moqit.v1.DvrCheckpoint"> & {
+  /**
+   * @generated from field: string track = 1;
+   */
+  track: string;
+
+  /**
+   * archive Group ID
+   *
+   * @generated from field: uint64 group = 2;
+   */
+  group: bigint;
+
+  /**
+   * server receive time, unix µs
+   *
+   * @generated from field: int64 at = 3;
+   */
+  at: bigint;
+
+  /**
+   * capture time from the LOC timestamp, unix µs; 0 if absent
+   *
+   * @generated from field: int64 loc = 4;
+   */
+  loc: bigint;
+};
+
+/**
+ * Describes the message moqit.v1.DvrCheckpoint.
+ * Use `create(DvrCheckpointSchema)` to create a new message.
+ */
+export const DvrCheckpointSchema: GenMessage<DvrCheckpoint> = /*@__PURE__*/
+  messageDesc(file_moqit_v1_models, 8);
 
 /**
  * @generated from enum moqit.v1.TrackKind

@@ -60,6 +60,7 @@ async function main() {
     const mean = offsets.reduce((a, b) => a + b, 0) / offsets.length;
     result.avSync = `mean ${mean.toFixed(1)}ms, max |offset| ${Math.max(...offsets.map(Math.abs)).toFixed(1)}ms over ${offsets.length} samples`;
     if (Math.abs(mean) > 60) throw new Error(`video out of sync with audio: ${result.avSync}`);
+    if (alice.getStats().sendLimited) throw new Error("send-side adaptation limited video on an unshaped connection");
     step(`A/V sync ${result.avSync}`);
     const mic = alice.localParticipant.tracks.get("microphone") as { encodeDelayMs?: number; sendDelayMs?: number } | undefined;
     result.latency = `video ${Math.round(video!.latencyMs)}ms, audio ${Math.round(audio!.latencyMs)}ms (capture to arrival, same machine); audio encode ${Math.round(mic?.encodeDelayMs ?? -1)}ms, send ${Math.round(mic?.sendDelayMs ?? -1)}ms`;
@@ -81,6 +82,32 @@ async function main() {
     if (!carol.isViewer || carol.remoteParticipants.size !== 2) throw new Error(`carol sees ${[...carol.remoteParticipants.keys()]}`);
     const refused = await carol.localParticipant.setMicrophoneEnabled(true).then(() => false, () => true);
     if (!refused) throw new Error("a viewer published its microphone");
+
+    // Rewind: Carol plays the meeting from 5 seconds ago, then goes live.
+    await until("carol has 8s of history", () => carol.timeline.available && carol.timeline.history >= 8, 30000);
+    await carol.seek(5);
+    let vmark = carolVideo!.framesDecoded;
+    let amark = carolAudio!.framesDecoded;
+    await until("rewound video and audio decode about 5s behind", () =>
+      carolVideo!.rewound && carolVideo!.framesDecoded > vmark + 30 && carolVideo!.latencyMs > 3000 &&
+      carolAudio!.framesDecoded > amark + 50 && carolAudio!.latencyMs > 3000, 20000);
+    const rewoundOffsets: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      if (!Number.isNaN(carolVideo!.avOffsetMs)) rewoundOffsets.push(carolVideo!.avOffsetMs);
+    }
+    const rewoundMean = rewoundOffsets.reduce((a, b) => a + b, 0) / Math.max(1, rewoundOffsets.length);
+    result.rewind = `5s back: video ${Math.round(carolVideo!.latencyMs)}ms, audio ${Math.round(carolAudio!.latencyMs)}ms behind capture; ` +
+      `timeline ${carol.timeline.behind.toFixed(1)}s behind of ${carol.timeline.history.toFixed(0)}s; A/V mean ${rewoundMean.toFixed(1)}ms over ${rewoundOffsets.length} samples`;
+    step(result.rewind as string);
+    if (Math.abs(carolVideo!.latencyMs - 5000) > 2500) throw new Error(`rewound video is not ~5s behind: ${result.rewind}`);
+    if (rewoundOffsets.length < 10 || Math.abs(rewoundMean) > 80) throw new Error(`rewound video out of sync with audio: ${result.rewind}`);
+    await carol.goLive();
+    vmark = carolVideo!.framesDecoded;
+    amark = carolAudio!.framesDecoded;
+    await until("back live", () => !carolVideo!.rewound && carolVideo!.framesDecoded > vmark + 30 && carolVideo!.latencyMs < 1500 &&
+      carolAudio!.framesDecoded > amark + 50 && carolAudio!.latencyMs < 1500, 20000);
+    if (!carol.timeline.live) throw new Error("timeline not live after goLive");
     await carol.disconnect();
     await until("viewer count drops", () => alice.numViewers === 0);
 

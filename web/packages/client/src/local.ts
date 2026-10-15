@@ -3,12 +3,32 @@
 import type { OutgoingSubgroup, SubscribeRequest, TrackWriter } from "@moq-it/moqt";
 import { type Rendition, RenditionSchema, TrackKind, TrackSource } from "./gen/moqit/v1/models_pb.ts";
 import { create } from "@bufbuild/protobuf";
+import { type Allocation, HALF_FLOOR, type Layer, SendQueue } from "./sendcontrol.ts";
 import { captureClock, codecForRenditions, LocProperty, RateMeter, type RenditionSpec, Serial, TrackName, videoEncoderConfig } from "./util.ts";
 
 const GOP_SECONDS = 2;
 const DRAIN_MS = 4000; // a dropped rendition keeps sending this long, while subscribers switch
 
 export type LocalTrack = LocalVideoTrack | LocalAudioTrack;
+
+/** A rendition being sent: its encoded size and bitrate, and how its sending keeps up. */
+export interface SendingRendition {
+  rendition: string;
+  width: number;
+  height: number;
+  /** Bits per second handed to the transport. */
+  bitrate: number;
+  /** How long the oldest frame not yet handed to the transport has waited, in ms. */
+  sendDelayMs: number;
+  /** Frames dropped because the uplink could not send them in time. */
+  droppedFrames: number;
+  /** The bitrate the encoder aims at; below the rendition's when the uplink is limited. */
+  targetBitrate: number;
+  /** Frames per second encoded. */
+  framerate: number;
+  /** Sent below its specified bitrate or frame rate because of the uplink. */
+  limited: boolean;
+}
 
 /**
  * Transforms a captured track before it is encoded, e.g. a background
@@ -178,6 +198,7 @@ export class LocalVideoTrack extends LocalTrackBase {
   private previewEl?: HTMLVideoElement;
   private specs_: RenditionSpec[];
   private draining = new Map<string, ReturnType<typeof setTimeout>>();
+  private suspended_ = new Set<string>();
   /** Published codec string; for H.264, with a level that fits every rendition. */
   codec: string;
 
@@ -232,8 +253,40 @@ export class LocalVideoTrack extends LocalTrackBase {
     return this.specs.map((s) => s.trackName);
   }
 
+  /** The renditions announced: all but those suspended for a limited uplink. */
   renditions(): Rendition[] {
-    return this.specs.map((s) => create(RenditionSchema, s));
+    return this.specs.filter((s) => !this.suspended_.has(s.trackName)).map((s) => create(RenditionSchema, s));
+  }
+
+  /** Renditions not sent because the uplink can't carry them. */
+  suspended(): string[] {
+    return this.specs.filter((s) => this.suspended_.has(s.trackName)).map((s) => s.trackName);
+  }
+
+  /** @internal The renditions as layers for send control, and which are being encoded. */
+  layers(): { layer: Layer; encoding: boolean }[] {
+    const n = this.specs_.length;
+    return this.specs_.map((s, i) => ({
+      layer: { rendition: s.trackName, rank: n - 1 - i, screen: this.source === TrackSource.SCREEN, spec: s.bitrate },
+      encoding: this.encoders.has(s.trackName),
+    }));
+  }
+
+  /** @internal Applies the send controller's shares to the encoders. */
+  applyAllocation(alloc: Map<string, Allocation>) {
+    for (const [name, enc] of this.encoders) {
+      const a = alloc.get(name);
+      if (!a) continue;
+      // A layer about to be suspended runs at the least until it is.
+      if (a.suspend) enc.setRate(0.5 * HALF_FLOOR * enc.specBitrate, true);
+      else enc.setRate(a.bitrate, a.halfRate);
+    }
+  }
+
+  /** @internal Stops (or resumes) encoding renditions the uplink can't carry; the caller re-announces the tracks. */
+  setSuspended(names: Set<string>) {
+    this.suspended_ = new Set([...names].filter((n) => this.specs_.some((s) => s.trackName === n)));
+    for (const [name, enc] of this.encoders) enc.setSuspended(this.suspended_.has(name));
   }
 
   /** A local preview element. */
@@ -260,13 +313,16 @@ export class LocalVideoTrack extends LocalTrackBase {
    * The renditions being sent, largest first: their encoded size and
    * bitrate. A rendition nobody subscribes to is not encoded.
    */
-  sending(): { rendition: string; width: number; height: number; bitrate: number }[] {
+  sending(): SendingRendition[] {
     const order = (name: string) => {
       const i = this.specs_.findIndex((s) => s.trackName === name);
       return i < 0 ? this.specs_.length : i;
     };
     return [...this.encoders.values()]
-      .map((e) => ({ rendition: e.name, ...(e.encodedSize ?? { width: 0, height: 0 }), bitrate: e.bitrate }))
+      .map((e) => ({
+        rendition: e.name, ...(e.encodedSize ?? { width: 0, height: 0 }), bitrate: e.bitrate,
+        sendDelayMs: e.sendDelayMs, droppedFrames: e.droppedFrames, targetBitrate: e.targetBitrate, framerate: e.framerate, limited: e.limited,
+      }))
       .sort((a, b) => order(a.rendition) - order(b.rendition));
   }
 
@@ -280,6 +336,7 @@ export class LocalVideoTrack extends LocalTrackBase {
     if (!spec) return req.reject(0x10, "no such rendition");
     const writer = await req.accept({ properties: [{ type: 0x30, int: 1 }] }); // DYNAMIC_GROUPS: honours NEW_GROUP_REQUEST
     const enc = new RenditionEncoder(this, spec, writer);
+    enc.setSuspended(this.suspended_.has(spec.trackName));
     this.encoders.get(spec.trackName)?.close();
     this.encoders.set(spec.trackName, enc);
     writer.signal.addEventListener("abort", () => {
@@ -321,9 +378,15 @@ class RenditionEncoder {
   private canvas?: OffscreenCanvas;
   private ctx?: OffscreenCanvasRenderingContext2D;
   private forceKey = true;
-  private frames = 0;
+  private lastKeyAt = 0; // capture µs of the last keyframe
+  private lastFrameAt = 0; // capture µs of the last frame encoded
+  private rate?: number; // bitrate set by send control; the spec's otherwise
+  private rateAt = 0;
+  private reconfigure = false;
+  private halfRate = false;
+  private suspended = false;
   private group?: { sg: OutgoingSubgroup; next: number };
-  private serial = new Serial();
+  private queue = new SendQueue<EncodedFrame>((f) => this.write(f), () => this.abandonGroup());
   private closed = false;
   private failedAt = 0;
   private meter = new RateMeter();
@@ -367,7 +430,47 @@ class RenditionEncoder {
   /** New size, bitrate or frame rate: the encoder is reconfigured on the next frame. */
   setSpec(spec: RenditionSpec) {
     this.spec = spec;
+    this.rate = undefined;
     this.configured = undefined;
+  }
+
+  get targetBitrate(): number {
+    return this.rate ?? this.spec.bitrate;
+  }
+
+  get specBitrate(): number {
+    return this.spec.bitrate;
+  }
+
+  get framerate(): number {
+    return this.halfRate ? this.spec.framerate / 2 : this.spec.framerate;
+  }
+
+  get limited(): boolean {
+    return this.halfRate || this.targetBitrate < 0.95 * this.spec.bitrate;
+  }
+
+  /**
+   * Send control's share: the encoder's bitrate (applied without a
+   * keyframe; increases at most once a second, changes under 10% ignored)
+   * and whether to encode at half the frame rate.
+   */
+  setRate(bitrate: number, halfRate: boolean) {
+    this.halfRate = halfRate;
+    const b = Math.round(Math.min(bitrate, this.spec.bitrate));
+    const cur = this.targetBitrate;
+    if (Math.abs(b - cur) < 0.1 * cur) return;
+    const now = performance.now();
+    if (b > cur && now - this.rateAt < 1000) return;
+    this.rate = b;
+    this.rateAt = now;
+    this.reconfigure = true;
+  }
+
+  setSuspended(suspended: boolean) {
+    if (suspended === this.suspended) return;
+    this.suspended = suspended;
+    if (suspended) this.abandonGroup();
   }
 
   /** Output size: the rendition's box, never upscaling the source. */
@@ -378,7 +481,9 @@ class RenditionEncoder {
   }
 
   encode(frame: VideoFrame, timestamp: number) {
-    if (this.closed || !this.writer.forwarding) return;
+    if (this.closed || this.suspended || !this.writer.forwarding) return;
+    // Half frame rate: skip frames closer than two frame intervals.
+    if (this.halfRate && timestamp - this.lastFrameAt < 0.9 * (2e6 / this.spec.framerate)) return;
     if (this.encoder.state === "closed") {
       if (performance.now() - this.failedAt < 1000) return; // retry at most once a second
       this.encoder = this.newEncoder();
@@ -386,11 +491,14 @@ class RenditionEncoder {
     }
     if (this.encoder.encodeQueueSize > 2) return; // encoder behind: drop rather than add latency
     const { width, height } = this.size(frame);
-    if (!this.configured || this.configured.width !== width || this.configured.height !== height) {
+    const resized = !this.configured || this.configured.width !== width || this.configured.height !== height;
+    if (resized || this.reconfigure) {
       this.configured = { width, height };
-      this.forceKey = true;
+      // A new size needs a keyframe; a new bitrate alone doesn't.
+      if (resized) this.forceKey = true;
+      this.reconfigure = false;
       try {
-        this.encoder.configure(videoEncoderConfig(this.track.codec, width, height, this.spec.bitrate, this.spec.framerate));
+        this.encoder.configure(videoEncoderConfig(this.track.codec, width, height, this.targetBitrate, this.spec.framerate));
       } catch (e) {
         console.error(`moqit: ${this.spec.trackName} encoder configure failed (${this.track.codec} ${width}x${height})`, e);
         this.failedAt = performance.now();
@@ -410,9 +518,10 @@ class RenditionEncoder {
       this.ctx!.drawImage(frame, 0, 0, width, height);
       input = new VideoFrame(this.canvas, { timestamp });
     }
-    const keyFrame = this.forceKey || this.frames % (GOP_SECONDS * this.spec.framerate) === 0;
+    const keyFrame = this.forceKey || timestamp - this.lastKeyAt >= GOP_SECONDS * 1e6;
     this.forceKey = false;
-    this.frames++;
+    if (keyFrame) this.lastKeyAt = timestamp;
+    this.lastFrameAt = timestamp;
     this.encoder.encode(input, { keyFrame });
     input.close();
   }
@@ -420,19 +529,41 @@ class RenditionEncoder {
   private output(chunk: EncodedVideoChunk) {
     const payload = new Uint8Array(chunk.byteLength);
     chunk.copyTo(payload);
-    const key = chunk.type === "key";
-    void this.serial.run(async () => {
-      if (this.closed) return;
-      if (key) {
-        // Each GOP is a Group, starting with its keyframe.
-        await this.group?.sg.close();
-        this.group = { sg: this.writer.openSubgroup(this.track.takeGroup(), 0, { properties: true }), next: 0 };
-      }
-      if (!this.group) return; // no keyframe yet
-      const id = this.group.next++;
-      await this.group.sg.writeObject({ id, status: 0, payload, properties: [{ type: LocProperty.Timestamp, int: chunk.timestamp }] });
-      this.meter.add(payload.byteLength);
-    }).catch(() => this.group?.sg.reset());
+    this.queue.push({ key: chunk.type === "key", bytes: payload.byteLength, payload, timestamp: chunk.timestamp });
+  }
+
+  private async write(f: EncodedFrame) {
+    if (this.closed) return;
+    if (f.key) {
+      // Each GOP is a Group, starting with its keyframe.
+      await this.group?.sg.close();
+      this.group = { sg: this.writer.openSubgroup(this.track.takeGroup(), 0, { properties: true }), next: 0 };
+    }
+    const g = this.group;
+    if (!g) return; // no keyframe yet
+    try {
+      await g.sg.writeObject({ id: g.next++, status: 0, payload: f.payload, properties: [{ type: LocProperty.Timestamp, int: f.timestamp }] });
+      this.meter.add(f.payload.byteLength);
+    } catch (e) {
+      if (this.group === g) this.abandonGroup();
+      throw e;
+    }
+  }
+
+  // The rest of the Group can't be sent in time: reset it and start the
+  // next from a keyframe.
+  private abandonGroup() {
+    this.group?.sg.reset();
+    this.group = undefined;
+    this.forceKey = true;
+  }
+
+  /** How long the oldest unsent frame has waited (ms), and frames dropped so far. */
+  get sendDelayMs(): number {
+    return this.queue.delay();
+  }
+  get droppedFrames(): number {
+    return this.queue.droppedFrames;
   }
 
   close() {
@@ -443,11 +574,20 @@ class RenditionEncoder {
     } catch {
       // already closed
     }
-    void this.serial.run(async () => {
+    this.queue.close();
+    void (async () => {
+      await this.queue.idle();
       await this.group?.sg.close();
       await this.writer.close();
-    });
+    })().catch(() => {});
   }
+}
+
+interface EncodedFrame {
+  key: boolean;
+  bytes: number;
+  payload: Uint8Array;
+  timestamp: number;
 }
 
 const SAMPLE_RATE = 48000;

@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file moqit/v1/signal.proto.
  */
 export const file_moqit_v1_signal: GenFile = /*@__PURE__*/
-  fileDesc("ChVtb3FpdC92MS9zaWduYWwucHJvdG8SCG1vcWl0LnYxIqgCCg9Sb29tU3RhdGVVcGRhdGUSDwoHdmVyc2lvbhgBIAEoBBIqCghzbmFwc2hvdBgCIAEoCzIWLm1vcWl0LnYxLlJvb21TbmFwc2hvdEgAEjgKE3BhcnRpY2lwYW50X3VwZGF0ZWQYAyABKAsyGS5tb3FpdC52MS5QYXJ0aWNpcGFudEluZm9IABI1ChBwYXJ0aWNpcGFudF9sZWZ0GAQgASgLMhkubW9xaXQudjEuUGFydGljaXBhbnRMZWZ0SAASJgoMcm9vbV91cGRhdGVkGAUgASgLMg4ubW9xaXQudjEuUm9vbUgAEjUKEHNwZWFrZXJzX2NoYW5nZWQYBiABKAsyGS5tb3FpdC52MS5TcGVha2Vyc0NoYW5nZWRIAEIICgZ1cGRhdGUihgEKDFJvb21TbmFwc2hvdBIcCgRyb29tGAEgASgLMg4ubW9xaXQudjEuUm9vbRIvCgxwYXJ0aWNpcGFudHMYAiADKAsyGS5tb3FpdC52MS5QYXJ0aWNpcGFudEluZm8SJwoIc3BlYWtlcnMYAyADKAsyFS5tb3FpdC52MS5TcGVha2VySW5mbyJcCg9QYXJ0aWNpcGFudExlZnQSEAoIaWRlbnRpdHkYASABKAkSCwoDc2lkGAIgASgJEioKBnJlYXNvbhgDIAEoDjIaLm1vcWl0LnYxLkRpc2Nvbm5lY3RSZWFzb24iOgoPU3BlYWtlcnNDaGFuZ2VkEicKCHNwZWFrZXJzGAEgAygLMhUubW9xaXQudjEuU3BlYWtlckluZm8iuwEKDENsaWVudFNpZ25hbBISCgpyZXF1ZXN0X2lkGAEgASgEEjkKEnVwZGF0ZV9wYXJ0aWNpcGFudBgCIAEoCzIbLm1vcWl0LnYxLlVwZGF0ZVBhcnRpY2lwYW50SAASKQoKc2V0X3RyYWNrcxgDIAEoCzITLm1vcWl0LnYxLlNldFRyYWNrc0gAEicKCXNlbmRfZGF0YRgEIAEoCzISLm1vcWl0LnYxLlNlbmREYXRhSABCCAoGc2lnbmFsIscBChFVcGRhdGVQYXJ0aWNpcGFudBIRCgRuYW1lGAEgASgJSACIAQESFQoIbWV0YWRhdGEYAiABKAlIAYgBARI/CgphdHRyaWJ1dGVzGAMgAygLMisubW9xaXQudjEuVXBkYXRlUGFydGljaXBhbnQuQXR0cmlidXRlc0VudHJ5GjEKD0F0dHJpYnV0ZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQgcKBV9uYW1lQgsKCV9tZXRhZGF0YSIwCglTZXRUcmFja3MSIwoGdHJhY2tzGAEgAygLMhMubW9xaXQudjEuVHJhY2tJbmZvIkoKCFNlbmREYXRhEh4KFmRlc3RpbmF0aW9uX2lkZW50aXRpZXMYASADKAkSDQoFdG9waWMYAiABKAkSDwoHcGF5bG9hZBgDIAEoDCK7AQoMSW5ib3hNZXNzYWdlEi0KCHJlc3BvbnNlGAEgASgLMhkubW9xaXQudjEuUmVxdWVzdFJlc3BvbnNlSAASJgoEZGF0YRgCIAEoCzIWLm1vcWl0LnYxLkRhdGFSZWNlaXZlZEgAEhcKDXJlZnJlc2hfdG9rZW4YAyABKAlIABIwCgptdXRlX3RyYWNrGAQgASgLMhoubW9xaXQudjEuTXV0ZVRyYWNrQ29tbWFuZEgAQgkKB21lc3NhZ2UiNAoQTXV0ZVRyYWNrQ29tbWFuZBIRCgl0cmFja19zaWQYASABKAkSDQoFbXV0ZWQYAiABKAgiXwoPUmVxdWVzdFJlc3BvbnNlEhIKCnJlcXVlc3RfaWQYASABKAQSJwoGcmVzdWx0GAIgASgOMhcubW9xaXQudjEuUmVxdWVzdFJlc3VsdBIPCgdtZXNzYWdlGAMgASgJIkUKDERhdGFSZWNlaXZlZBIVCg1mcm9tX2lkZW50aXR5GAEgASgJEg0KBXRvcGljGAIgASgJEg8KB3BheWxvYWQYAyABKAwiLAoKRGF0YVBhY2tldBINCgV0b3BpYxgBIAEoCRIPCgdwYXlsb2FkGAIgASgMKqABCg1SZXF1ZXN0UmVzdWx0Eh4KGlJFUVVFU1RfUkVTVUxUX1VOU1BFQ0lGSUVEEAASFQoRUkVRVUVTVF9SRVNVTFRfT0sQARIeChpSRVFVRVNUX1JFU1VMVF9OT1RfQUxMT1dFRBACEhoKFlJFUVVFU1RfUkVTVUxUX0lOVkFMSUQQAxIcChhSRVFVRVNUX1JFU1VMVF9OT1RfRk9VTkQQBEIwWi5naXRodWIuY29tL01vUS1pdC9tb3FpdC9wcm90by9tb3FpdC92MTttb3FpdHYxYgZwcm90bzM", [file_moqit_v1_models]);
+  fileDesc("ChVtb3FpdC92MS9zaWduYWwucHJvdG8SCG1vcWl0LnYxIqgCCg9Sb29tU3RhdGVVcGRhdGUSDwoHdmVyc2lvbhgBIAEoBBIqCghzbmFwc2hvdBgCIAEoCzIWLm1vcWl0LnYxLlJvb21TbmFwc2hvdEgAEjgKE3BhcnRpY2lwYW50X3VwZGF0ZWQYAyABKAsyGS5tb3FpdC52MS5QYXJ0aWNpcGFudEluZm9IABI1ChBwYXJ0aWNpcGFudF9sZWZ0GAQgASgLMhkubW9xaXQudjEuUGFydGljaXBhbnRMZWZ0SAASJgoMcm9vbV91cGRhdGVkGAUgASgLMg4ubW9xaXQudjEuUm9vbUgAEjUKEHNwZWFrZXJzX2NoYW5nZWQYBiABKAsyGS5tb3FpdC52MS5TcGVha2Vyc0NoYW5nZWRIAEIICgZ1cGRhdGUihgEKDFJvb21TbmFwc2hvdBIcCgRyb29tGAEgASgLMg4ubW9xaXQudjEuUm9vbRIvCgxwYXJ0aWNpcGFudHMYAiADKAsyGS5tb3FpdC52MS5QYXJ0aWNpcGFudEluZm8SJwoIc3BlYWtlcnMYAyADKAsyFS5tb3FpdC52MS5TcGVha2VySW5mbyJcCg9QYXJ0aWNpcGFudExlZnQSEAoIaWRlbnRpdHkYASABKAkSCwoDc2lkGAIgASgJEioKBnJlYXNvbhgDIAEoDjIaLm1vcWl0LnYxLkRpc2Nvbm5lY3RSZWFzb24iOgoPU3BlYWtlcnNDaGFuZ2VkEicKCHNwZWFrZXJzGAEgAygLMhUubW9xaXQudjEuU3BlYWtlckluZm8iuwEKDENsaWVudFNpZ25hbBISCgpyZXF1ZXN0X2lkGAEgASgEEjkKEnVwZGF0ZV9wYXJ0aWNpcGFudBgCIAEoCzIbLm1vcWl0LnYxLlVwZGF0ZVBhcnRpY2lwYW50SAASKQoKc2V0X3RyYWNrcxgDIAEoCzITLm1vcWl0LnYxLlNldFRyYWNrc0gAEicKCXNlbmRfZGF0YRgEIAEoCzISLm1vcWl0LnYxLlNlbmREYXRhSABCCAoGc2lnbmFsIscBChFVcGRhdGVQYXJ0aWNpcGFudBIRCgRuYW1lGAEgASgJSACIAQESFQoIbWV0YWRhdGEYAiABKAlIAYgBARI/CgphdHRyaWJ1dGVzGAMgAygLMisubW9xaXQudjEuVXBkYXRlUGFydGljaXBhbnQuQXR0cmlidXRlc0VudHJ5GjEKD0F0dHJpYnV0ZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQgcKBV9uYW1lQgsKCV9tZXRhZGF0YSIwCglTZXRUcmFja3MSIwoGdHJhY2tzGAEgAygLMhMubW9xaXQudjEuVHJhY2tJbmZvIkoKCFNlbmREYXRhEh4KFmRlc3RpbmF0aW9uX2lkZW50aXRpZXMYASADKAkSDQoFdG9waWMYAiABKAkSDwoHcGF5bG9hZBgDIAEoDCLsAQoMSW5ib3hNZXNzYWdlEi0KCHJlc3BvbnNlGAEgASgLMhkubW9xaXQudjEuUmVxdWVzdFJlc3BvbnNlSAASJgoEZGF0YRgCIAEoCzIWLm1vcWl0LnYxLkRhdGFSZWNlaXZlZEgAEhcKDXJlZnJlc2hfdG9rZW4YAyABKAlIABIwCgptdXRlX3RyYWNrGAQgASgLMhoubW9xaXQudjEuTXV0ZVRyYWNrQ29tbWFuZEgAEi8KDXNlbmRfZmVlZGJhY2sYBSABKAsyFi5tb3FpdC52MS5TZW5kRmVlZGJhY2tIAEIJCgdtZXNzYWdlIkEKDFNlbmRGZWVkYmFjaxIYChBxdWV1aW5nX2RlbGF5X21zGAEgASgNEhcKD3JlY2VpdmVfYml0cmF0ZRgCIAEoDSI0ChBNdXRlVHJhY2tDb21tYW5kEhEKCXRyYWNrX3NpZBgBIAEoCRINCgVtdXRlZBgCIAEoCCJfCg9SZXF1ZXN0UmVzcG9uc2USEgoKcmVxdWVzdF9pZBgBIAEoBBInCgZyZXN1bHQYAiABKA4yFy5tb3FpdC52MS5SZXF1ZXN0UmVzdWx0Eg8KB21lc3NhZ2UYAyABKAkiRQoMRGF0YVJlY2VpdmVkEhUKDWZyb21faWRlbnRpdHkYASABKAkSDQoFdG9waWMYAiABKAkSDwoHcGF5bG9hZBgDIAEoDCIsCgpEYXRhUGFja2V0Eg0KBXRvcGljGAEgASgJEg8KB3BheWxvYWQYAiABKAwqoAEKDVJlcXVlc3RSZXN1bHQSHgoaUkVRVUVTVF9SRVNVTFRfVU5TUEVDSUZJRUQQABIVChFSRVFVRVNUX1JFU1VMVF9PSxABEh4KGlJFUVVFU1RfUkVTVUxUX05PVF9BTExPV0VEEAISGgoWUkVRVUVTVF9SRVNVTFRfSU5WQUxJRBADEhwKGFJFUVVFU1RfUkVTVUxUX05PVF9GT1VORBAEQjBaLmdpdGh1Yi5jb20vTW9RLWl0L21vcWl0L3Byb3RvL21vcWl0L3YxO21vcWl0djFiBnByb3RvMw", [file_moqit_v1_models]);
 
 /**
  * @generated from message moqit.v1.RoomStateUpdate
@@ -297,6 +297,14 @@ export type InboxMessage = Message<"moqit.v1.InboxMessage"> & {
      */
     value: MuteTrackCommand;
     case: "muteTrack";
+  } | {
+    /**
+     * how the participant's media is arriving, every half second while it sends
+     *
+     * @generated from field: moqit.v1.SendFeedback send_feedback = 5;
+     */
+    value: SendFeedback;
+    case: "sendFeedback";
   } | { case: undefined; value?: undefined };
 };
 
@@ -306,6 +314,35 @@ export type InboxMessage = Message<"moqit.v1.InboxMessage"> & {
  */
 export const InboxMessageSchema: GenMessage<InboxMessage> = /*@__PURE__*/
   messageDesc(file_moqit_v1_signal, 8);
+
+/**
+ * How a participant's media reaches the server, for the SDK to fit what it
+ * sends to its uplink.
+ *
+ * @generated from message moqit.v1.SendFeedback
+ */
+export type SendFeedback = Message<"moqit.v1.SendFeedback"> & {
+  /**
+   * one-way delay over the lowest seen in the last two minutes
+   *
+   * @generated from field: uint32 queuing_delay_ms = 1;
+   */
+  queuingDelayMs: number;
+
+  /**
+   * media received from the participant, bits per second
+   *
+   * @generated from field: uint32 receive_bitrate = 2;
+   */
+  receiveBitrate: number;
+};
+
+/**
+ * Describes the message moqit.v1.SendFeedback.
+ * Use `create(SendFeedbackSchema)` to create a new message.
+ */
+export const SendFeedbackSchema: GenMessage<SendFeedback> = /*@__PURE__*/
+  messageDesc(file_moqit_v1_signal, 9);
 
 /**
  * @generated from message moqit.v1.MuteTrackCommand
@@ -327,7 +364,7 @@ export type MuteTrackCommand = Message<"moqit.v1.MuteTrackCommand"> & {
  * Use `create(MuteTrackCommandSchema)` to create a new message.
  */
 export const MuteTrackCommandSchema: GenMessage<MuteTrackCommand> = /*@__PURE__*/
-  messageDesc(file_moqit_v1_signal, 9);
+  messageDesc(file_moqit_v1_signal, 10);
 
 /**
  * @generated from message moqit.v1.RequestResponse
@@ -354,7 +391,7 @@ export type RequestResponse = Message<"moqit.v1.RequestResponse"> & {
  * Use `create(RequestResponseSchema)` to create a new message.
  */
 export const RequestResponseSchema: GenMessage<RequestResponse> = /*@__PURE__*/
-  messageDesc(file_moqit_v1_signal, 10);
+  messageDesc(file_moqit_v1_signal, 11);
 
 /**
  * @generated from message moqit.v1.DataReceived
@@ -381,7 +418,7 @@ export type DataReceived = Message<"moqit.v1.DataReceived"> & {
  * Use `create(DataReceivedSchema)` to create a new message.
  */
 export const DataReceivedSchema: GenMessage<DataReceived> = /*@__PURE__*/
-  messageDesc(file_moqit_v1_signal, 11);
+  messageDesc(file_moqit_v1_signal, 12);
 
 /**
  * One message on a participant's "data" (reliable) or "data-lossy" track,
@@ -406,7 +443,7 @@ export type DataPacket = Message<"moqit.v1.DataPacket"> & {
  * Use `create(DataPacketSchema)` to create a new message.
  */
 export const DataPacketSchema: GenMessage<DataPacket> = /*@__PURE__*/
-  messageDesc(file_moqit_v1_signal, 12);
+  messageDesc(file_moqit_v1_signal, 13);
 
 /**
  * @generated from enum moqit.v1.RequestResult

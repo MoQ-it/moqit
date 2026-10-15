@@ -56,6 +56,14 @@ moqit-server -edge -tier 2 -region eu …   # leaf edge: fetches through a tier 
 - **Routing:** viewers are routed to the deepest tier among the edges with room for them, in their `?region=` if it has any. Edges in upper tiers still accept viewers that connect to them directly.
 - **Cost of a hop:** over loopback, viewers on the origin, a tier 1 edge and a tier 2 edge all saw p50 2 ms and p95 4 ms capture-to-arrival latency (200 viewers each, audio and 600 kbps video). Each hop's cost over a real network is its round trip and serialisation, which this does not measure.
 
+### Rewind in a cluster
+
+Each node records the participants it hosts, to its own `-dvr-dir` (see [protocol.md](protocol.md#rewind)):
+- **Roster:** a redis roster says which node holds each recording, so an edge forwards a viewer's FETCH to that node. A tier 2 edge forwards through its parent.
+- **History outlives the session:** it stays fetchable after a participant leaves or moves to another node.
+- **Restarts:** the roster names nodes by `-node-id`, so a node restarted with a new ID can't be found. Give recording nodes a stable `-node-id` and a persistent `-dvr-dir`.
+- **No edge cache:** edges don't cache FETCHes yet, so every rewinding viewer reads from the recording node, at most `-dvr-fetch-limit` FETCHes at once.
+
 ### Capacity
 
 `moqit bench` (see [development.md](development.md#load-testing)) measures this. One edge on a 24-core machine, with the bench client on the same machine over loopback:

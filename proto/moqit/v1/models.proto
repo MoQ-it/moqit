@@ -16,6 +16,7 @@ message Room {
   uint32 num_participants = 7;
   int64 created_at = 8; // unix ms
   uint32 num_viewers = 9; // read-only viewers on every node, refreshed every few seconds
+  uint32 dvr_window = 10; // seconds of history viewers can rewind; 0 = off
 }
 
 enum TrackKind {
@@ -103,4 +104,33 @@ enum ConnectionQuality {
   CONNECTION_QUALITY_GOOD = 2;
   CONNECTION_QUALITY_EXCELLENT = 3;
   CONNECTION_QUALITY_LOST = 4;
+}
+
+// One minute of a participant's recorded history, for viewers to seek in.
+// It is Object 0 of Group <unix minute> of the participant's "dvr" track,
+// which is fetch-only.
+message DvrIndex {
+  int64 earliest = 1; // server time (unix µs) of the oldest stored Object of the participant
+  int64 latest = 2; // server time (unix µs) of the newest
+  repeated DvrEpoch epochs = 3; // the epochs the checkpoints refer to
+  repeated DvrCheckpoint checkpoints = 4; // ordered by at
+}
+
+// One continuous recording of a track. Its archive Group IDs are
+// epoch << 32 | publisher Group.
+message DvrEpoch {
+  uint32 epoch = 1;
+  string track = 2; // MoQ track name, e.g. "camera-m"
+  string codec = 3; // WebCodecs codec string
+  uint32 width = 4;
+  uint32 height = 5;
+  uint32 channels = 6; // audio channels; 0 means 1
+}
+
+// A Group start in the archive: where playback can begin decoding.
+message DvrCheckpoint {
+  string track = 1;
+  uint64 group = 2; // archive Group ID
+  int64 at = 3; // server receive time, unix µs
+  int64 loc = 4; // capture time from the LOC timestamp, unix µs; 0 if absent
 }

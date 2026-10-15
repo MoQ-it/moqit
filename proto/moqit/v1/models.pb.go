@@ -306,6 +306,7 @@ type Room struct {
 	NumParticipants  uint32                 `protobuf:"varint,7,opt,name=num_participants,json=numParticipants,proto3" json:"num_participants,omitempty"`
 	CreatedAt        int64                  `protobuf:"varint,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`    // unix ms
 	NumViewers       uint32                 `protobuf:"varint,9,opt,name=num_viewers,json=numViewers,proto3" json:"num_viewers,omitempty"` // read-only viewers on every node, refreshed every few seconds
+	DvrWindow        uint32                 `protobuf:"varint,10,opt,name=dvr_window,json=dvrWindow,proto3" json:"dvr_window,omitempty"`   // seconds of history viewers can rewind; 0 = off
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -399,6 +400,13 @@ func (x *Room) GetCreatedAt() int64 {
 func (x *Room) GetNumViewers() uint32 {
 	if x != nil {
 		return x.NumViewers
+	}
+	return 0
+}
+
+func (x *Room) GetDvrWindow() uint32 {
+	if x != nil {
+		return x.DvrWindow
 	}
 	return 0
 }
@@ -833,11 +841,237 @@ func (x *SpeakerInfo) GetLevel() float32 {
 	return 0
 }
 
+// One minute of a participant's recorded history, for viewers to seek in.
+// It is Object 0 of Group <unix minute> of the participant's "dvr" track,
+// which is fetch-only.
+type DvrIndex struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Earliest      int64                  `protobuf:"varint,1,opt,name=earliest,proto3" json:"earliest,omitempty"`      // server time (unix µs) of the oldest stored Object of the participant
+	Latest        int64                  `protobuf:"varint,2,opt,name=latest,proto3" json:"latest,omitempty"`          // server time (unix µs) of the newest
+	Epochs        []*DvrEpoch            `protobuf:"bytes,3,rep,name=epochs,proto3" json:"epochs,omitempty"`           // the epochs the checkpoints refer to
+	Checkpoints   []*DvrCheckpoint       `protobuf:"bytes,4,rep,name=checkpoints,proto3" json:"checkpoints,omitempty"` // ordered by at
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DvrIndex) Reset() {
+	*x = DvrIndex{}
+	mi := &file_moqit_v1_models_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DvrIndex) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DvrIndex) ProtoMessage() {}
+
+func (x *DvrIndex) ProtoReflect() protoreflect.Message {
+	mi := &file_moqit_v1_models_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DvrIndex.ProtoReflect.Descriptor instead.
+func (*DvrIndex) Descriptor() ([]byte, []int) {
+	return file_moqit_v1_models_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *DvrIndex) GetEarliest() int64 {
+	if x != nil {
+		return x.Earliest
+	}
+	return 0
+}
+
+func (x *DvrIndex) GetLatest() int64 {
+	if x != nil {
+		return x.Latest
+	}
+	return 0
+}
+
+func (x *DvrIndex) GetEpochs() []*DvrEpoch {
+	if x != nil {
+		return x.Epochs
+	}
+	return nil
+}
+
+func (x *DvrIndex) GetCheckpoints() []*DvrCheckpoint {
+	if x != nil {
+		return x.Checkpoints
+	}
+	return nil
+}
+
+// One continuous recording of a track. Its archive Group IDs are
+// epoch << 32 | publisher Group.
+type DvrEpoch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint32                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Track         string                 `protobuf:"bytes,2,opt,name=track,proto3" json:"track,omitempty"` // MoQ track name, e.g. "camera-m"
+	Codec         string                 `protobuf:"bytes,3,opt,name=codec,proto3" json:"codec,omitempty"` // WebCodecs codec string
+	Width         uint32                 `protobuf:"varint,4,opt,name=width,proto3" json:"width,omitempty"`
+	Height        uint32                 `protobuf:"varint,5,opt,name=height,proto3" json:"height,omitempty"`
+	Channels      uint32                 `protobuf:"varint,6,opt,name=channels,proto3" json:"channels,omitempty"` // audio channels; 0 means 1
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DvrEpoch) Reset() {
+	*x = DvrEpoch{}
+	mi := &file_moqit_v1_models_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DvrEpoch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DvrEpoch) ProtoMessage() {}
+
+func (x *DvrEpoch) ProtoReflect() protoreflect.Message {
+	mi := &file_moqit_v1_models_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DvrEpoch.ProtoReflect.Descriptor instead.
+func (*DvrEpoch) Descriptor() ([]byte, []int) {
+	return file_moqit_v1_models_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *DvrEpoch) GetEpoch() uint32 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *DvrEpoch) GetTrack() string {
+	if x != nil {
+		return x.Track
+	}
+	return ""
+}
+
+func (x *DvrEpoch) GetCodec() string {
+	if x != nil {
+		return x.Codec
+	}
+	return ""
+}
+
+func (x *DvrEpoch) GetWidth() uint32 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *DvrEpoch) GetHeight() uint32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *DvrEpoch) GetChannels() uint32 {
+	if x != nil {
+		return x.Channels
+	}
+	return 0
+}
+
+// A Group start in the archive: where playback can begin decoding.
+type DvrCheckpoint struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Track         string                 `protobuf:"bytes,1,opt,name=track,proto3" json:"track,omitempty"`
+	Group         uint64                 `protobuf:"varint,2,opt,name=group,proto3" json:"group,omitempty"` // archive Group ID
+	At            int64                  `protobuf:"varint,3,opt,name=at,proto3" json:"at,omitempty"`       // server receive time, unix µs
+	Loc           int64                  `protobuf:"varint,4,opt,name=loc,proto3" json:"loc,omitempty"`     // capture time from the LOC timestamp, unix µs; 0 if absent
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DvrCheckpoint) Reset() {
+	*x = DvrCheckpoint{}
+	mi := &file_moqit_v1_models_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DvrCheckpoint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DvrCheckpoint) ProtoMessage() {}
+
+func (x *DvrCheckpoint) ProtoReflect() protoreflect.Message {
+	mi := &file_moqit_v1_models_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DvrCheckpoint.ProtoReflect.Descriptor instead.
+func (*DvrCheckpoint) Descriptor() ([]byte, []int) {
+	return file_moqit_v1_models_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *DvrCheckpoint) GetTrack() string {
+	if x != nil {
+		return x.Track
+	}
+	return ""
+}
+
+func (x *DvrCheckpoint) GetGroup() uint64 {
+	if x != nil {
+		return x.Group
+	}
+	return 0
+}
+
+func (x *DvrCheckpoint) GetAt() int64 {
+	if x != nil {
+		return x.At
+	}
+	return 0
+}
+
+func (x *DvrCheckpoint) GetLoc() int64 {
+	if x != nil {
+		return x.Loc
+	}
+	return 0
+}
+
 var File_moqit_v1_models_proto protoreflect.FileDescriptor
 
 const file_moqit_v1_models_proto_rawDesc = "" +
 	"\n" +
-	"\x15moqit/v1/models.proto\x12\bmoqit.v1\"\xb0\x02\n" +
+	"\x15moqit/v1/models.proto\x12\bmoqit.v1\"\xcf\x02\n" +
 	"\x04Room\x12\x10\n" +
 	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
@@ -849,7 +1083,10 @@ const file_moqit_v1_models_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\b \x01(\x03R\tcreatedAt\x12\x1f\n" +
 	"\vnum_viewers\x18\t \x01(\rR\n" +
-	"numViewers\"\x90\x01\n" +
+	"numViewers\x12\x1d\n" +
+	"\n" +
+	"dvr_window\x18\n" +
+	" \x01(\rR\tdvrWindow\"\x90\x01\n" +
 	"\tRendition\x12\x1d\n" +
 	"\n" +
 	"track_name\x18\x01 \x01(\tR\ttrackName\x12\x14\n" +
@@ -897,7 +1134,24 @@ const file_moqit_v1_models_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"?\n" +
 	"\vSpeakerInfo\x12\x1a\n" +
 	"\bidentity\x18\x01 \x01(\tR\bidentity\x12\x14\n" +
-	"\x05level\x18\x02 \x01(\x02R\x05level*S\n" +
+	"\x05level\x18\x02 \x01(\x02R\x05level\"\xa5\x01\n" +
+	"\bDvrIndex\x12\x1a\n" +
+	"\bearliest\x18\x01 \x01(\x03R\bearliest\x12\x16\n" +
+	"\x06latest\x18\x02 \x01(\x03R\x06latest\x12*\n" +
+	"\x06epochs\x18\x03 \x03(\v2\x12.moqit.v1.DvrEpochR\x06epochs\x129\n" +
+	"\vcheckpoints\x18\x04 \x03(\v2\x17.moqit.v1.DvrCheckpointR\vcheckpoints\"\x96\x01\n" +
+	"\bDvrEpoch\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\rR\x05epoch\x12\x14\n" +
+	"\x05track\x18\x02 \x01(\tR\x05track\x12\x14\n" +
+	"\x05codec\x18\x03 \x01(\tR\x05codec\x12\x14\n" +
+	"\x05width\x18\x04 \x01(\rR\x05width\x12\x16\n" +
+	"\x06height\x18\x05 \x01(\rR\x06height\x12\x1a\n" +
+	"\bchannels\x18\x06 \x01(\rR\bchannels\"]\n" +
+	"\rDvrCheckpoint\x12\x14\n" +
+	"\x05track\x18\x01 \x01(\tR\x05track\x12\x14\n" +
+	"\x05group\x18\x02 \x01(\x04R\x05group\x12\x0e\n" +
+	"\x02at\x18\x03 \x01(\x03R\x02at\x12\x10\n" +
+	"\x03loc\x18\x04 \x01(\x03R\x03loc*S\n" +
 	"\tTrackKind\x12\x1a\n" +
 	"\x16TRACK_KIND_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10TRACK_KIND_AUDIO\x10\x01\x12\x14\n" +
@@ -941,7 +1195,7 @@ func file_moqit_v1_models_proto_rawDescGZIP() []byte {
 }
 
 var file_moqit_v1_models_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_moqit_v1_models_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_moqit_v1_models_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_moqit_v1_models_proto_goTypes = []any{
 	(TrackKind)(0),                // 0: moqit.v1.TrackKind
 	(TrackSource)(0),              // 1: moqit.v1.TrackSource
@@ -954,7 +1208,10 @@ var file_moqit_v1_models_proto_goTypes = []any{
 	(*ParticipantPermission)(nil), // 8: moqit.v1.ParticipantPermission
 	(*ParticipantInfo)(nil),       // 9: moqit.v1.ParticipantInfo
 	(*SpeakerInfo)(nil),           // 10: moqit.v1.SpeakerInfo
-	nil,                           // 11: moqit.v1.ParticipantInfo.AttributesEntry
+	(*DvrIndex)(nil),              // 11: moqit.v1.DvrIndex
+	(*DvrEpoch)(nil),              // 12: moqit.v1.DvrEpoch
+	(*DvrCheckpoint)(nil),         // 13: moqit.v1.DvrCheckpoint
+	nil,                           // 14: moqit.v1.ParticipantInfo.AttributesEntry
 }
 var file_moqit_v1_models_proto_depIdxs = []int32{
 	0,  // 0: moqit.v1.TrackInfo.kind:type_name -> moqit.v1.TrackKind
@@ -962,14 +1219,16 @@ var file_moqit_v1_models_proto_depIdxs = []int32{
 	6,  // 2: moqit.v1.TrackInfo.renditions:type_name -> moqit.v1.Rendition
 	1,  // 3: moqit.v1.ParticipantPermission.can_publish_sources:type_name -> moqit.v1.TrackSource
 	2,  // 4: moqit.v1.ParticipantInfo.state:type_name -> moqit.v1.ParticipantState
-	11, // 5: moqit.v1.ParticipantInfo.attributes:type_name -> moqit.v1.ParticipantInfo.AttributesEntry
+	14, // 5: moqit.v1.ParticipantInfo.attributes:type_name -> moqit.v1.ParticipantInfo.AttributesEntry
 	8,  // 6: moqit.v1.ParticipantInfo.permission:type_name -> moqit.v1.ParticipantPermission
 	7,  // 7: moqit.v1.ParticipantInfo.tracks:type_name -> moqit.v1.TrackInfo
-	8,  // [8:8] is the sub-list for method output_type
-	8,  // [8:8] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	12, // 8: moqit.v1.DvrIndex.epochs:type_name -> moqit.v1.DvrEpoch
+	13, // 9: moqit.v1.DvrIndex.checkpoints:type_name -> moqit.v1.DvrCheckpoint
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_moqit_v1_models_proto_init() }
@@ -983,7 +1242,7 @@ func file_moqit_v1_models_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_moqit_v1_models_proto_rawDesc), len(file_moqit_v1_models_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   7,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

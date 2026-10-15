@@ -22,6 +22,7 @@ type Participant struct {
 
 	trackSids  map[string]string // track name -> sid, stable across SetTracks
 	inbox      inbox
+	uplink     uplink
 	signalOnce sync.Once
 }
 
@@ -200,6 +201,7 @@ func (p *Participant) setTracks(tracks []*moqitv1.TrackInfo) error {
 	for _, t := range unpublished {
 		p.room.m.notify(webhookTrackUnpublished, roomInfo, me, t)
 	}
+	p.room.m.syncRecordings(p.room, me.Identity)
 	return nil
 }
 

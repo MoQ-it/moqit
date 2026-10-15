@@ -58,6 +58,10 @@ Restarting the node ends meetings in progress; participants rejoin by reloading 
 
 This setup runs one node. Viewers of `https://<domain>/watch/<code>` count against the same node's capacity. For large audiences, run a cluster with edge nodes for viewers: see [clustering.md](clustering.md#edge-nodes-and-viewers).
 
+## Rewind
+
+Rewinding is off in this setup. To turn it on, give the node a persistent volume and start it with `-dvr-dir` on it (or `MOQIT_DVR_DIR`) and `-dvr-window`, e.g. `1h`. Size the volume from [server.md](server.md#rewind-dvr), or cap it with `-dvr-max-bytes`. This has not been tested with Docker.
+
 ## Security notes
 
 - **Anyone who can open the site can create and join meetings**: Meet's token endpoint has no login. Put your own authentication in front of it, or mint tokens from your own backend instead (see [server.md](server.md)).

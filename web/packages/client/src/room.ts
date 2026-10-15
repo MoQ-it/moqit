@@ -19,7 +19,9 @@ import {
   RequestResult,
   RoomStateUpdateSchema,
 } from "./gen/moqit/v1/signal_pb.ts";
+import { Rewind, type Timeline } from "./dvr.ts";
 import { LocalAudioTrack, type LocalTrack, LocalVideoTrack, type TrackProcessor } from "./local.ts";
+import { allocate, type Feedback, SendController, Suspensions } from "./sendcontrol.ts";
 import { AudioOutput, type RemoteAudioTrack, RemoteTrackPublication, type RemoteTrack } from "./remote.ts";
 import {
   CameraPresets,
@@ -73,6 +75,10 @@ export type RoomEvents = {
   viewerCountChanged: [number];
   /** A microphone, camera or speaker was chosen with switchActiveDevice. */
   activeDeviceChanged: [MediaDeviceKind, string];
+  /** A viewer's place in the room's history, or how much there is, changed. */
+  timelineChanged: [Timeline];
+  /** Video is sent below the quality asked for because the uplink can't carry it, or no longer is. */
+  sendLimitedChanged: [boolean];
 };
 
 export interface RoomOptions {
@@ -92,6 +98,12 @@ export interface RoomOptions {
    * connection times out.
    */
   disconnectOnPageLeave?: boolean;
+  /**
+   * Fit the video sent to the uplink (default true): lower bitrates, then
+   * frame rates, then stop the largest layers while the network can't
+   * carry them, using the server's reports on how media arrives.
+   */
+  adaptiveSend?: boolean;
 }
 
 export interface ConnectOptions {
@@ -153,10 +165,12 @@ export class Room extends Emitter<RoomEvents> {
   private inboxSub?: Subscription;
   private devices = new Map<MediaDeviceKind, string>();
   private receiveQuality?: VideoQuality;
+  private rewind?: Rewind;
+  private rewindTimer?: ReturnType<typeof setInterval>;
 
   constructor(options: RoomOptions = {}) {
     super();
-    this.options = { autoSubscribe: true, videoQuality: "medium", adaptiveStream: true, disconnectOnPageLeave: true, ...options };
+    this.options = { autoSubscribe: true, videoQuality: "medium", adaptiveStream: true, disconnectOnPageLeave: true, adaptiveSend: true, ...options };
   }
 
   /** Read-only viewers of the room, on every node; updated every few seconds. */
@@ -216,6 +230,12 @@ export class Room extends Emitter<RoomEvents> {
         }),
       ]);
       if (this.options.disconnectOnPageLeave && typeof window !== "undefined") window.addEventListener("pagehide", this.onPageLeave);
+      if (this.isViewer) {
+        const session = this.session;
+        this.rewind = new Rewind(session, (id) => participantNamespace(this.name, id));
+        void this.refreshTimeline();
+        this.rewindTimer = setInterval(() => void this.refreshTimeline(), 5000);
+      }
     } catch (e) {
       this.session?.close();
       this.setState(ConnectionState.Disconnected);
@@ -266,14 +286,15 @@ export class Room extends Emitter<RoomEvents> {
   }
 
   /** Media bitrates now, in bits per second: everything sent, and everything received. */
-  getStats(): { sendBitrate: number; receiveBitrate: number } {
+  getStats(): { sendBitrate: number; receiveBitrate: number; sendLimited: boolean; sendTarget: number } {
     let sendBitrate = 0;
     for (const t of this.localParticipant?.tracks.values() ?? []) {
       sendBitrate += t instanceof LocalVideoTrack ? t.sending().reduce((sum, r) => sum + r.bitrate, 0) : t.bitrate;
     }
     let receiveBitrate = 0;
     for (const p of this.remoteParticipants.values()) for (const pub of p.trackPublications.values()) receiveBitrate += pub.track?.bitrate ?? 0;
-    return { sendBitrate, receiveBitrate };
+    const lp = this.localParticipant;
+    return { sendBitrate, receiveBitrate, sendLimited: lp?.sendLimited ?? false, sendTarget: lp?.sendTarget ?? 0 };
   }
 
   /** The receive quality set with setVideoQuality; undefined is automatic. */
@@ -292,6 +313,42 @@ export class Room extends Emitter<RoomEvents> {
     await Promise.all(pubs.filter((pub) => pub.kind === TrackKind.VIDEO).map((pub) => pub.setVideoQuality(quality)));
   }
 
+  /**
+   * A viewer's place in the room's history. Rooms created with a
+   * dvr_window keep that much history, which viewers can rewind.
+   */
+  get timeline(): Timeline {
+    const available = this.isViewer && (this.info?.dvrWindow ?? 0) > 0;
+    return this.rewind?.timeline(available) ?? { available, live: true, behind: 0, history: 0 };
+  }
+
+  /**
+   * Viewers only: plays every participant from secondsBehindLive ago (as
+   * far back as the history goes) and keeps playing from there; 0 goes
+   * live.
+   */
+  async seek(secondsBehindLive: number): Promise<void> {
+    if (!this.rewind || !this.timeline.available) throw new Error("rewind is for viewers of rooms that keep history");
+    if (secondsBehindLive <= 0) return this.goLive();
+    const tracks = [...this.remoteParticipants.values()].flatMap((p) =>
+      [...p.trackPublications.values()].filter((pub) => pub.track).map((pub) => ({ identity: p.identity, source: pub.source, track: pub.track! })));
+    this.rewind.seek(secondsBehindLive, tracks);
+    this.emit("timelineChanged", this.timeline);
+  }
+
+  /** Viewers only: returns from history to the live room. */
+  async goLive(): Promise<void> {
+    if (!this.rewind?.active) return;
+    await this.rewind.goLive();
+    this.emit("timelineChanged", this.timeline);
+  }
+
+  private async refreshTimeline() {
+    if (!this.rewind || !this.timeline.available) return;
+    await this.rewind.refresh([...this.remoteParticipants.keys()]).catch(() => {});
+    this.emit("timelineChanged", this.timeline);
+  }
+
   /** Starts audio playback; call from a user gesture if the browser blocked autoplay. */
   startAudio(): Promise<void> {
     return this.audio.start();
@@ -307,6 +364,9 @@ export class Room extends Emitter<RoomEvents> {
 
   private handleClosed(err: Error | undefined) {
     if (this.state === ConnectionState.Disconnected) return;
+    clearInterval(this.rewindTimer);
+    this.localParticipant?.stopSendControl();
+    this.rewind?.close();
     if (typeof window !== "undefined") window.removeEventListener("pagehide", this.onPageLeave);
     this.setState(ConnectionState.Disconnected);
     for (const p of this.remoteParticipants.values()) p.close();
@@ -394,6 +454,8 @@ export class Room extends Emitter<RoomEvents> {
           if (name && track && track.muted !== muted) {
             void this.localParticipant.setTrackMuted(name, muted).then(() => this.emit("localTrackMutedByServer", track, muted));
           }
+        } else if (m.message.case === "sendFeedback") {
+          this.localParticipant.sendFeedback(m.message.value);
         }
       });
     }
@@ -517,11 +579,18 @@ export class Room extends Emitter<RoomEvents> {
   }
   /** @internal */
   emitSubscribed(sub: boolean, t: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) {
+    // Tracks subscribed while rewound join the rewind.
+    if (sub && this.rewind?.active) this.rewind.play(p.identity, pub.source, t);
+    if (!sub) this.rewind?.drop(t);
     this.emit(sub ? "trackSubscribed" : "trackUnsubscribed", t, pub, p);
   }
   /** @internal */
   emitData(payload: Uint8Array, p: RemoteParticipant, topic: string) {
     this.emit("dataReceived", payload, p, topic);
+  }
+  /** @internal */
+  emitSendLimited(limited: boolean) {
+    this.emit("sendLimitedChanged", limited);
   }
   /** @internal */
   emitLocal(published: boolean, t: LocalTrack) {
@@ -641,9 +710,71 @@ export class LocalParticipant extends Participant {
   private videoCodec?: Promise<string>;
   private cameraRes: VideoResolution = "720p";
   private processors = new Map<TrackSource, TrackProcessor | undefined>();
+  private send = new SendController();
+  private suspensions = new Suspensions();
+  private sendTimer?: ReturnType<typeof setInterval>;
+  private calmSince = 0;
+  /** Whether video is sent below the quality asked for, because the uplink can't carry it. */
+  sendLimited = false;
 
   constructor(info: ParticipantInfo, private room: Room) {
     super(info);
+    if (room.options.adaptiveSend) this.sendTimer = setInterval(() => this.controlSend(), 250);
+  }
+
+  /** The video bitrate send control allows, in bits per second; 0 before any video is sent. */
+  get sendTarget(): number {
+    return this.send.target;
+  }
+
+  /** @internal The server's report on how our media arrives. */
+  sendFeedback(fb: Feedback) {
+    this.send.feedback(fb);
+  }
+
+  /** @internal */
+  stopSendControl() {
+    clearInterval(this.sendTimer);
+  }
+
+  // Fits the video to the uplink: shares the controller's target among
+  // the renditions being encoded and suspends those it can't carry.
+  private controlSend() {
+    const video = [...this.tracks.values()].filter((t): t is LocalVideoTrack => t instanceof LocalVideoTrack);
+    const layers = video.flatMap((t) => t.layers());
+    const suspended = this.suspensions.suspended;
+    const running = layers.filter((l) => l.encoding && !suspended.has(l.layer.rendition)).map((l) => l.layer);
+    const candidates = layers.filter((l) => suspended.has(l.layer.rendition)).map((l) => l.layer);
+    if (!running.length && !candidates.length) return;
+    let queueDelayMs = 0;
+    let drops = 0;
+    let sendRate = 0;
+    for (const t of video) {
+      for (const r of t.sending()) {
+        queueDelayMs = Math.max(queueDelayMs, r.sendDelayMs);
+        drops += r.droppedFrames;
+        sendRate += r.bitrate;
+      }
+    }
+    const audioRate = [...this.tracks.values()].reduce((n, t) => n + (t instanceof LocalAudioTrack ? t.bitrate : 0), 0);
+    const maxTarget = [...running, ...candidates].reduce((n, l) => n + l.spec, 0);
+    const signals = { queueDelayMs, drops, sendRate, audioRate, maxTarget };
+    this.send.tick(signals);
+    if (!this.send.calm(signals)) this.calmSince = performance.now();
+    const alloc = allocate(this.send.target, running);
+    for (const t of video) t.applyAllocation(alloc);
+    if (this.suspensions.update(alloc, running, this.send.target, this.calmSince, candidates)) {
+      for (const t of video) t.setSuspended(suspended);
+      void this.syncTracks().catch(() => {});
+    }
+    const limited = suspended.size > 0 || running.some((l) => {
+      const a = alloc.get(l.rendition);
+      return !a || a.halfRate || a.bitrate < 0.95 * l.spec;
+    });
+    if (limited !== this.sendLimited) {
+      this.sendLimited = limited;
+      this.room.emitSendLimited(limited);
+    }
   }
 
   get isLocal(): boolean {

@@ -10,10 +10,11 @@ import {
 } from "@moqit/client";
 import { createContext, type CSSProperties, type ReactNode, useContext, useEffect, useRef, useState } from "react";
 import {
-  RoomContext, useActiveDevice, useAudioPlayback, useChat, useIsSpeaking, useLocalParticipant, useMediaDevices, useParticipants, useRoomUpdates,
-  useScreenShares, useVideoTrack,
+  RoomContext, useActiveDevice, useAudioPlayback, useChat, useIsSpeaking, useLocalParticipant, useMediaDevices, useParticipants, useRoom, useRoomUpdates,
+  useScreenShares, useTimeline, useVideoTrack,
 } from "./hooks.ts";
 import { gridFit } from "./layout.ts";
+import { formatClock } from "./time.ts";
 
 export function RoomProvider({ room, children }: { room: Room; children: ReactNode }) {
   return <RoomContext.Provider value={room}>{children}</RoomContext.Provider>;
@@ -48,7 +49,7 @@ export function formatBitrate(bps: number): string {
  * sent, with its size and bitrate (a layer nobody watches is not sent).
  */
 function VideoStats({ participant, source, track }: { participant: Participant; source: TrackSource; track: LocalVideoTrack | RemoteVideoTrack }) {
-  const [lines, setLines] = useState<{ text: string; rendition?: string; resolution?: string; bitrate: number }[]>([]);
+  const [lines, setLines] = useState<{ text: string; rendition?: string; resolution?: string; bitrate: number; limited?: boolean; target?: number }[]>([]);
   useEffect(() => {
     const read = () => {
       if (participant.isLocal) {
@@ -56,8 +57,12 @@ function VideoStats({ participant, source, track }: { participant: Participant; 
         const { width, height } = local.capturedTrack.getSettings();
         const captured = width && height ? [{ text: `● captured ${width}×${height}`, bitrate: 0 }] : [];
         const sending = local.sending().filter((r) => r.width > 0);
-        if (sending.length === 0) return [...captured, { text: "not sent: nobody watching", bitrate: 0 }];
-        return [...captured, ...sending.map((r) => ({ text: `↑ ${r.rendition} ${r.width}×${r.height} · ${formatBitrate(r.bitrate)}`, rendition: r.rendition, resolution: `${r.width}x${r.height}`, bitrate: r.bitrate }))];
+        const suspended = local.suspended().map((name) => ({ text: `${name} paused: uplink too slow`, bitrate: 0, limited: true }));
+        if (sending.length === 0) return [...captured, ...suspended, { text: "not sent: nobody watching", bitrate: 0 }];
+        return [...captured, ...sending.map((r) => ({
+          text: `↑ ${r.rendition} ${r.width}×${r.height} · ${formatBitrate(r.bitrate)}${r.limited ? ` · limited to ${formatBitrate(r.targetBitrate)}${r.framerate < 20 ? ` at ${Math.round(r.framerate)} fps` : ""}` : ""}`,
+          rendition: r.rendition, resolution: `${r.width}x${r.height}`, bitrate: r.bitrate, limited: r.limited, target: r.targetBitrate,
+        })), ...suspended];
       }
       const r = track as RemoteVideoTrack;
       if (!r.width) return [];
@@ -71,7 +76,11 @@ function VideoStats({ participant, source, track }: { participant: Participant; 
   if (lines.length === 0) return null;
   return (
     <div className="moqit-stats" data-resolution={lines.find((l) => l.resolution)?.resolution} data-bitrate={Math.round(lines.reduce((s, l) => s + l.bitrate, 0))}>
-      {lines.map((l, i) => <div key={l.rendition ?? i} data-rendition={l.rendition} data-bitrate={Math.round(l.bitrate)}>{l.text}</div>)}
+      {lines.map((l, i) => (
+        <div key={l.rendition ?? i} data-rendition={l.rendition} data-bitrate={Math.round(l.bitrate)} data-limited={l.limited || undefined} data-target={l.target && Math.round(l.target)}>
+          {l.text}
+        </div>
+      ))}
     </div>
   );
 }
@@ -79,15 +88,16 @@ function VideoStats({ participant, source, track }: { participant: Participant; 
 /** The meeting's total media bitrate sent (↑) and received (↓). */
 export function MeetingStats() {
   const room = useContext(RoomContext);
-  const [stats, setStats] = useState({ sendBitrate: 0, receiveBitrate: 0 });
+  const [stats, setStats] = useState({ sendBitrate: 0, receiveBitrate: 0, sendLimited: false, sendTarget: 0 });
   useEffect(() => {
     if (!room) return;
     const id = setInterval(() => setStats(room.getStats()), 1000);
     return () => clearInterval(id);
   }, [room]);
   return (
-    <span className="moqit-meeting-stats" data-send={Math.round(stats.sendBitrate)} data-receive={Math.round(stats.receiveBitrate)} title="media bitrate sent and received">
-      ↑ {formatBitrate(stats.sendBitrate)} ↓ {formatBitrate(stats.receiveBitrate)}
+    <span className="moqit-meeting-stats" data-send={Math.round(stats.sendBitrate)} data-receive={Math.round(stats.receiveBitrate)} data-limited={stats.sendLimited || undefined}
+      title={stats.sendLimited ? `sending less video: your connection carries about ${formatBitrate(stats.sendTarget)}` : "media bitrate sent and received"}>
+      ↑ {formatBitrate(stats.sendBitrate)}{stats.sendLimited ? " (limited)" : ""} ↓ {formatBitrate(stats.receiveBitrate)}
     </span>
   );
 }
@@ -418,4 +428,44 @@ export function StartAudio() {
   const { canPlay, start } = useAudioPlayback();
   if (canPlay) return null;
   return <button className="moqit-start-audio" onClick={() => void start()}>🔊 Click to enable audio</button>;
+}
+
+/**
+ * For viewers of a room that keeps history: a bar to rewind it (oldest on
+ * the left, live on the right), a 10 seconds back button and a LIVE
+ * button. Renders nothing otherwise.
+ */
+export function Scrubber() {
+  const room = useRoom();
+  const tl = useTimeline();
+  const [drag, setDrag] = useState<number>();
+  const commit = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(commit.current), []);
+  if (!tl.available) return null;
+  const span = Math.max(1, Math.ceil(tl.history));
+  const value = drag ?? Math.max(0, span - Math.round(tl.behind));
+  const seek = (behind: number) => void (behind < 2 ? room.goLive() : room.seek(Math.min(behind, span))).catch(() => {});
+  const onChange = (v: number) => {
+    setDrag(v);
+    clearTimeout(commit.current);
+    commit.current = setTimeout(() => {
+      seek(span - v);
+      setDrag(undefined);
+    }, 250);
+  };
+  return (
+    <div className="moqit-scrubber" data-live={tl.live} data-behind={Math.round(tl.behind)}>
+      <button className="moqit-back" onClick={() => seek(tl.behind + 10)} title="Back 10 seconds" aria-label="back 10 seconds">
+        −10s
+      </button>
+      <input
+        type="range" min={0} max={span} step={1} value={Math.min(value, span)} aria-label="position in the meeting"
+        onChange={(e) => onChange(Number(e.currentTarget.value))}
+      />
+      <span className="moqit-behind">{tl.live ? "" : `−${formatClock(span - value)}`}</span>
+      <button className="moqit-live" data-live={tl.live} disabled={tl.live} onClick={() => seek(0)} title={tl.live ? "Live" : "Go live"}>
+        LIVE
+      </button>
+    </div>
+  );
 }
