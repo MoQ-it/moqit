@@ -389,6 +389,52 @@ const RAW = 0.01;
   await alice.locator(".moqit-grid").waitFor();
   log("stopping the share returns both to the grid");
 
+  // Three participants: Bob's grid fits every tile in the stage, equally
+  // sized, whatever the window's shape.
+  const carol = await join_(browser, url, "Carol", false);
+  await waitFor(async () => (await count(bob)) === 3, "Bob to see three participants");
+  await waitFor(() => videoPlaying(bob, "carol-"), "Bob to see Carol's video");
+  const gridFits = () => bob.evaluate(() => {
+    const grid = document.querySelector(".moqit-grid")?.getBoundingClientRect();
+    const tiles = [...document.querySelectorAll(".moqit-grid > .moqit-tile")].map((t) => t.getBoundingClientRect());
+    return !!grid && tiles.length === 3 && tiles.every((r) => r.width > 100 && Math.abs(r.width - tiles[0].width) < 1
+      && r.top >= grid.top - 1 && r.bottom <= grid.bottom + 1 && r.left >= grid.left - 1 && r.right <= grid.right + 1);
+  });
+  for (const [viewport, cols] of [[{ width: 1280, height: 800 }, "2"], [{ width: 1800, height: 560 }, "3"], [{ width: 600, height: 1000 }, "1"]]) {
+    await bob.setViewportSize(viewport);
+    await waitFor(async () => (await gridFits()) && (await bob.locator(".moqit-grid").getAttribute("data-cols")) === cols,
+      `three tiles in ${cols} column(s) to fit Bob's ${viewport.width}x${viewport.height} window`, 5000);
+    await bob.screenshot({ path: join(shots, `bob-grid-3-${viewport.width}x${viewport.height}.png`) });
+  }
+  await bob.setViewportSize({ width: 1280, height: 800 });
+  log("grid: three participants fit in 2, 3 and 1 columns as the window changes");
+
+  // Bob pins Carol to the stage, takes her full screen and unpins her.
+  await bob.getByRole("button", { name: /^pin Carol/ }).click();
+  await bob.locator('.moqit-stage .moqit-tile.pinned[data-source=camera][data-identity^="carol-"]').waitFor({ timeout: 5000 });
+  const strip = await bob.locator(".moqit-strip .moqit-tile").evaluateAll((ts) => ts.map((t) => t.dataset.identity.split("-")[0]).sort().join(","));
+  if (strip !== "alice,bob") throw new Error(`strip beside pinned Carol holds ${strip}`);
+  await waitFor(() => bob.evaluate(() => {
+    const v = document.querySelector(".moqit-stage .moqit-tile video, .moqit-stage .moqit-tile canvas");
+    return (v instanceof HTMLVideoElement ? v.videoWidth : v?.width) >= 1280;
+  }), "Bob to receive Carol's top layer on the stage");
+  await bob.getByRole("button", { name: "full screen", exact: true }).click();
+  await waitFor(() => bob.evaluate(() => document.fullscreenElement?.classList.contains("moqit-stage")), "the stage to go full screen", 5000);
+  await bob.screenshot({ path: join(shots, "bob-carol-full-screen.png") });
+  await bob.getByRole("button", { name: "exit full screen" }).click();
+  await waitFor(() => bob.evaluate(() => !document.fullscreenElement), "full screen to end", 5000);
+  await bob.getByRole("button", { name: /^unpin Carol/ }).click();
+  await bob.locator(".moqit-grid").waitFor({ timeout: 5000 });
+  log("pin: Carol on Bob's stage at her top layer, full screen and back, unpinned to the grid");
+
+  // A pin ends when its participant leaves.
+  await bob.getByRole("button", { name: /^pin Carol/ }).click();
+  await bob.locator(".moqit-stage").waitFor({ timeout: 5000 });
+  await carol.context().close();
+  await waitFor(async () => (await count(bob)) === 2 && (await count(alice)) === 2, "both to see Carol leave");
+  await bob.locator(".moqit-grid").waitFor({ timeout: 5000 });
+  log("a pinned participant leaving returns Bob to the grid");
+
   await alice.getByRole("button", { name: "chat" }).click();
   await alice.getByLabel("chat message").fill("hello from alice");
   await alice.getByRole("button", { name: "Send" }).click();

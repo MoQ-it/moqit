@@ -104,10 +104,18 @@ await room.localParticipant.setProcessor(TrackSource.CAMERA, blur); // kept when
 import { ConferenceLayout, ControlBar, RoomProvider, StartAudio } from "@moqit/react";
 
 <RoomProvider room={room}>
-  <ConferenceLayout />   {/* grid, or a shared screen on stage */}
+  <ConferenceLayout />   {/* grid, or a pinned tile or shared screen on stage */}
   <ControlBar onLeave={leave} />
   <StartAudio />
 </RoomProvider>
+```
+
+- **`ConferenceLayout`:** shows `GridLayout`, or `FocusLayout` with one tile on the stage: the one the user pinned, else a shared screen. Every tile has a pin button; a pin ends when its participant leaves or stops sharing.
+- **`GridLayout`:** measures its element and uses `gridFit(width, height, n)` to choose the column count that makes the tiles largest while all fit. It sets the tile width as the `--moqit-tile-width` CSS variable, for your stylesheet to apply (Meet: `.moqit-grid > .moqit-tile { flex: 0 0 var(--moqit-tile-width) }` in a wrapping, centred flexbox).
+- **`FocusLayout`:** takes `presenter`, an optional `source` (default `TrackSource.SCREEN`), and optional `onPin` / `onUnpin` callbacks; the stage has a full-screen button. `ParticipantTile` takes `onPin` and `pinned` to show the pin button.
+
+```tsx
+<FocusLayout presenter={p} source={TrackSource.CAMERA} onUnpin={() => setPinned(undefined)} />
 ```
 
 For a viewer, `useParticipants` lists only the remote participants and `useLocalParticipant` returns `undefined`; `useViewerCount` gives the number of viewers.

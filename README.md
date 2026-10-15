@@ -30,7 +30,7 @@ It comes with a browser SDK, React components, a server API with webhooks, a Go 
 - **Go participant client** to join rooms and publish media from Go services
 - **Clustering** — a room can span nodes; Redis for state, MoQ between nodes
 - **Edge nodes** — read-only viewers served from edges for large audiences, with a load generator
-- **Meet** — a complete conferencing app with chat, presenting, effects, devices and stats
+- **Meet** — a complete conferencing app with chat, presenting, pinning, effects, devices and stats
 - **RTMP ingress** — stream from OBS into a room, transcoded into quality layers and stereo Opus ([moqit-ingress](https://github.com/MoQ-it/moqit-ingress))
 
 ## Quick start

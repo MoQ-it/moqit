@@ -8,11 +8,12 @@ import {
   type Room,
   TrackSource,
 } from "@moqit/client";
-import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from "react";
+import { createContext, type CSSProperties, type ReactNode, useContext, useEffect, useRef, useState } from "react";
 import {
   RoomContext, useActiveDevice, useAudioPlayback, useChat, useIsSpeaking, useLocalParticipant, useMediaDevices, useParticipants, useRoomUpdates,
   useScreenShares, useVideoTrack,
 } from "./hooks.ts";
+import { gridFit } from "./layout.ts";
 
 export function RoomProvider({ room, children }: { room: Room; children: ReactNode }) {
   return <RoomContext.Provider value={room}>{children}</RoomContext.Provider>;
@@ -95,7 +96,13 @@ function initials(name: string): string {
   return name.split(/\s+/).map((w) => w[0]?.toUpperCase() ?? "").slice(0, 2).join("");
 }
 
-export function ParticipantTile({ participant, source = TrackSource.CAMERA }: { participant: Participant; source?: TrackSource }) {
+/**
+ * A participant's camera or screen. With onPin, a button (and a double
+ * click) asks to pin it to the stage, or to unpin it when pinned.
+ */
+export function ParticipantTile({ participant, source = TrackSource.CAMERA, onPin, pinned = false }: {
+  participant: Participant; source?: TrackSource; onPin?: () => void; pinned?: boolean;
+}) {
   const video = useVideoTrack(participant, source);
   const speaking = useIsSpeaking(participant);
   useRoomUpdates();
@@ -109,7 +116,8 @@ export function ParticipantTile({ participant, source = TrackSource.CAMERA }: { 
   const isScreen = source === TrackSource.SCREEN;
   const showStats = useContext(VideoStatsContext);
   return (
-    <div className={`moqit-tile${speaking && !isScreen ? " speaking" : ""}${isScreen ? " screen" : ""}`} data-identity={participant.identity} data-source={isScreen ? "screen" : "camera"}>
+    <div className={`moqit-tile${speaking && !isScreen ? " speaking" : ""}${isScreen ? " screen" : ""}${pinned ? " pinned" : ""}`} data-identity={participant.identity} data-source={isScreen ? "screen" : "camera"}
+      onDoubleClick={onPin}>
       {video && !videoMuted ? (
         <VideoView track={video} mirror={participant.isLocal && !isScreen} />
       ) : (
@@ -121,45 +129,109 @@ export function ParticipantTile({ participant, source = TrackSource.CAMERA }: { 
         {isScreen ? `${name} (screen)` : name}
         {participant.isLocal && !isScreen && " (you)"}
       </div>
-    </div>
-  );
-}
-
-/** Every participant's camera tile in a grid. */
-export function GridLayout() {
-  const participants = useParticipants();
-  const cols = Math.ceil(Math.sqrt(participants.length));
-  return (
-    <div className="moqit-grid" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
-      {participants.map((p) => <ParticipantTile key={p.identity} participant={p} />)}
+      {onPin && (
+        <button className="moqit-pin" onClick={onPin} aria-label={`${pinned ? "unpin" : "pin"} ${name}${isScreen ? " (screen)" : ""}`} title={pinned ? "Unpin" : "Pin to the stage"}>
+          {pinned ? "✕" : "⤢"}
+        </button>
+      )}
     </div>
   );
 }
 
 /**
- * A shared screen on the stage with everyone's camera in a strip beside
- * it. The presenter sees a "you are presenting" card rather than a mirror
- * of their own screen.
+ * Every participant's camera tile in a grid sized to the element: as large
+ * as they can be while all fit, the last row centred. Tiles are offered
+ * for pinning with onPin.
  */
-export function FocusLayout({ presenter }: { presenter: Participant }) {
+export function GridLayout({ onPin }: { onPin?: (participant: Participant) => void } = {}) {
   const participants = useParticipants();
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: 0, height: 0, gap: 10 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setSize({ width: el.clientWidth, height: el.clientHeight, gap: parseFloat(getComputedStyle(el).columnGap) || 0 }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const { cols, tileWidth } = gridFit(size.width, size.height, participants.length, { gap: size.gap });
+  return (
+    <div ref={ref} className="moqit-grid" data-cols={cols} style={{ "--moqit-tile-width": `${tileWidth}px` } as CSSProperties}>
+      {participants.map((p) => <ParticipantTile key={p.identity} participant={p} onPin={onPin && (() => onPin(p))} />)}
+    </div>
+  );
+}
+
+/**
+ * One participant's screen (by default) or camera on the stage, with every
+ * other camera and shared screen in a strip beside it. The presenter sees
+ * a "you are presenting" card rather than a mirror of their own screen.
+ * With onPin, strip tiles can be pinned; with onUnpin, the stage shows it
+ * is pinned and offers to unpin. The stage can go full screen.
+ */
+export function FocusLayout({ presenter, source = TrackSource.SCREEN, onPin, onUnpin }: {
+  presenter: Participant; source?: TrackSource; onPin?: (participant: Participant, source: TrackSource) => void; onUnpin?: () => void;
+}) {
+  const participants = useParticipants();
+  const shares = useScreenShares();
+  const stage = useRef<HTMLDivElement>(null);
+  const [full, setFull] = useState(false);
+  useEffect(() => {
+    const on = () => setFull(!!stage.current && document.fullscreenElement === stage.current);
+    document.addEventListener("fullscreenchange", on);
+    return () => document.removeEventListener("fullscreenchange", on);
+  }, []);
+  const card = presenter.isLocal && source === TrackSource.SCREEN;
+  const onStage = (p: Participant, s: TrackSource) => p.identity === presenter.identity && s === source;
+  const cameras = participants.filter((p) => !onStage(p, TrackSource.CAMERA));
+  // Your own screen is never shown back to you.
+  const screens = shares.filter((p) => !p.isLocal && !onStage(p, TrackSource.SCREEN));
+  const toggleFull = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void stage.current?.requestFullscreen().catch(() => {});
+  };
   return (
     <div className="moqit-focus">
-      <div className="moqit-stage" data-presenter={presenter.identity}>
-        {presenter.isLocal ? <PresentingCard /> : <ParticipantTile participant={presenter} source={TrackSource.SCREEN} />}
+      <div ref={stage} className="moqit-stage" data-presenter={presenter.identity} data-source={source === TrackSource.SCREEN ? "screen" : "camera"}>
+        {card ? <PresentingCard /> : <ParticipantTile participant={presenter} source={source} onPin={onUnpin} pinned={!!onUnpin} />}
+        {!card && document.fullscreenEnabled && (
+          <button className="moqit-fullscreen" onClick={toggleFull} aria-label={full ? "exit full screen" : "full screen"} title={full ? "Exit full screen" : "Full screen"}>
+            {full ? "⤡" : "⛶"}
+          </button>
+        )}
       </div>
       <div className="moqit-strip">
-        {participants.map((p) => <ParticipantTile key={p.identity} participant={p} />)}
+        {screens.map((p) => <ParticipantTile key={`${p.identity}/screen`} participant={p} source={TrackSource.SCREEN} onPin={onPin && (() => onPin(p, TrackSource.SCREEN))} />)}
+        {cameras.map((p) => <ParticipantTile key={p.identity} participant={p} onPin={onPin && (() => onPin(p, TrackSource.CAMERA))} />)}
       </div>
     </div>
   );
 }
 
-/** Focus on a screen share when there is one, otherwise the grid. Remote shares win over your own. */
+/** A participant's camera or screen chosen for the stage. */
+export interface Pin {
+  identity: string;
+  source: TrackSource;
+}
+
+/**
+ * The grid, or one tile on the stage: the one the user pinned, else a
+ * shared screen (remote shares win over your own). Any tile can be pinned,
+ * and a pin ends when its participant leaves or stops sharing.
+ */
 export function ConferenceLayout() {
+  const participants = useParticipants();
   const shares = useScreenShares();
+  const [pin, setPin] = useState<Pin>();
+  const pinned = pin && (pin.source === TrackSource.SCREEN ? shares : participants).find((p) => p.identity === pin.identity);
+  useEffect(() => {
+    if (pin && !pinned) setPin(undefined);
+  }, [pin, pinned]);
+  const onPin = (p: Participant, source: TrackSource) => setPin({ identity: p.identity, source });
+  if (pin && pinned) return <FocusLayout presenter={pinned} source={pin.source} onPin={onPin} onUnpin={() => setPin(undefined)} />;
   const presenter = shares.find((p) => !p.isLocal) ?? shares[0];
-  return presenter ? <FocusLayout presenter={presenter} /> : <GridLayout />;
+  if (presenter) return <FocusLayout presenter={presenter} onPin={onPin} />;
+  return <GridLayout onPin={(p) => onPin(p, TrackSource.CAMERA)} />;
 }
 
 /** Shown to the presenter in place of their own screen. */

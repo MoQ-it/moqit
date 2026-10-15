@@ -29,7 +29,7 @@ The Docker image (`deploy/Dockerfile`, built from this directory alone) takes bo
 
 ```sh
 go test -race ./...                                  # unit and integration (real QUIC, miniredis)
-(cd web && npm test && npm run typecheck)            # TypeScript unit tests and types
+(cd web && npm test && npm run typecheck)            # TypeScript unit tests (client, react) and types
 go test -tags browser ./test/e2e                     # SDK in headless Chrome and Firefox
 (cd web && npm run build -w meet && npm run e2e -w meet)  # Meet UI, Playwright + system Chrome
 ```

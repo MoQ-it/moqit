@@ -74,10 +74,16 @@ select:disabled { opacity: 0.5; }
 .meeting aside { grid-area: chat; background: var(--panel); border-left: 1px solid #2c313c; min-height: 0; }
 .meeting footer { grid-area: footer; padding: 10px; background: var(--panel); }
 
-.moqit-grid { display: grid; gap: 10px; height: 100%; align-content: center; }
+/* GridLayout sets the tile width that fits every tile in the stage. */
+.moqit-grid {
+  display: flex; flex-wrap: wrap; justify-content: center; align-content: safe center; gap: 10px;
+  height: 100%; overflow-y: auto;
+}
+.moqit-grid > .moqit-tile { flex: 0 0 var(--moqit-tile-width); }
+/* The ring is drawn inside, so a scrolling container never clips it. */
 .moqit-tile {
   position: relative; aspect-ratio: 16 / 9; background: var(--tile); border-radius: 12px;
-  overflow: hidden; display: grid; place-items: center; outline: 3px solid transparent; transition: outline-color 0.15s;
+  overflow: hidden; display: grid; place-items: center; outline: 3px solid transparent; outline-offset: -3px; transition: outline-color 0.15s;
 }
 .moqit-tile.speaking { outline-color: var(--speaking); }
 .moqit-video-box, .moqit-video { width: 100%; height: 100%; }
@@ -93,6 +99,14 @@ select:disabled { opacity: 0.5; }
   padding: 3px 8px; border-radius: 6px; font-size: 0.85rem;
 }
 .moqit-muted { margin-right: 4px; }
+.moqit-pin, .moqit-fullscreen {
+  position: absolute; top: 8px; left: 8px; padding: 1px 8px; border: none; border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55); line-height: 1.5; opacity: 0; transition: opacity 0.15s;
+}
+.moqit-fullscreen { top: auto; left: auto; right: 8px; bottom: 8px; }
+.moqit-tile:hover .moqit-pin, .moqit-tile.pinned .moqit-pin, .moqit-stage:hover .moqit-fullscreen,
+.moqit-pin:focus-visible, .moqit-fullscreen:focus-visible { opacity: 1; }
+@media (hover: none) { .moqit-pin, .moqit-fullscreen { opacity: 1; } }
 
 .moqit-controls { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .moqit-controls button.off { color: var(--muted); }
@@ -110,7 +124,6 @@ select:disabled { opacity: 0.5; }
 
 @media (max-width: 700px) {
   .meeting.with-chat { grid-template: "header" auto "stage" 1fr "chat" 40vh "footer" auto / 1fr; }
-  .moqit-grid { grid-template-columns: 1fr !important; align-content: start; overflow-y: auto; }
 }
 .moqit-badge {
   margin-left: 6px; background: var(--danger); color: white; border-radius: 999px;
@@ -122,7 +135,10 @@ select:disabled { opacity: 0.5; }
 .moqit-focus { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 10px; height: 100%; min-height: 0; }
 /* Every level is clamped to the stage (grid items default to their content's
    height), so a tall share is scaled down to fit rather than cropped. */
-.moqit-stage { min-height: 0; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
+.moqit-stage { position: relative; min-height: 0; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
+.moqit-stage .moqit-video { object-fit: contain; background: black; }
+.moqit-stage:fullscreen { background: black; }
+.moqit-stage:fullscreen .moqit-tile { border-radius: 0; }
 .moqit-stage .moqit-tile { aspect-ratio: auto; height: 100%; min-height: 0; background: black; grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
 .moqit-stage .moqit-video-box { min-height: 0; min-width: 0; }
 .moqit-strip { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 0; }
