@@ -1,5 +1,5 @@
 import { Room } from "@moqit/client";
-import { ConferenceLayout, RoomProvider, Scrubber, StartAudio, useRoom, useTimeline } from "@moqit/react";
+import { ConferenceLayout, MeetingStats, RoomProvider, Scrubber, StartAudio, useRoom, useTimeline, VideoStatsContext } from "@moqit/react";
 import { useEffect, useState } from "react";
 import { navigate } from "./main.tsx";
 import { type ConnectionDetails, hexBytes, ParticipantCount, ViewerCount } from "./Meeting.tsx";
@@ -17,6 +17,11 @@ async function fetchViewerDetails(room: string): Promise<ConnectionDetails> {
 export function Watch({ room: roomName }: { room: string }) {
   const [room, setRoom] = useState<Room>();
   const [status, setStatus] = useState("Connecting…");
+  // ?debug shows the bitrate stats and puts the Room on window.moqitRoom for the console.
+  const debug = new URLSearchParams(location.search).has("debug");
+  useEffect(() => {
+    if (debug) (window as { moqitRoom?: Room }).moqitRoom = room;
+  }, [debug, room]);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +65,7 @@ export function Watch({ room: roomName }: { room: string }) {
           <RoomProvider room={room}>
             <ParticipantCount />
             <ViewerCount />
+            {debug && <MeetingStats />}
             <StartAudio />
           </RoomProvider>
         ) : (
@@ -72,7 +78,9 @@ export function Watch({ room: roomName }: { room: string }) {
       <section className="stage">
         {room && (
           <RoomProvider room={room}>
-            <ConferenceLayout />
+            <VideoStatsContext.Provider value={debug}>
+              <ConferenceLayout />
+            </VideoStatsContext.Provider>
           </RoomProvider>
         )}
       </section>

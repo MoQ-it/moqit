@@ -292,6 +292,13 @@ async function scenario(browser) {
   if ((await count(alice)) !== 2 || (await count(bob)) !== 2) throw new Error("the viewer was counted as a participant");
   await viewer.screenshot({ path: join(shots, "viewer.png") });
   if (!process.env.MEET_URL) await rewind(viewer); // meet -dev keeps an hour of history
+  // ?debug shows the stats and exposes the Room to the console.
+  await viewer.goto(url.replace("/r/", "/watch/") + "?debug");
+  await waitFor(async () => (await tile(viewer, "alice-").locator(".moqit-stats").textContent({ timeout: 1000 }).catch(() => "")).includes("bps")
+    && /\d+ (k|M)?bps/.test((await viewer.locator(".moqit-meeting-stats").textContent({ timeout: 1000 }).catch(() => "")) ?? "")
+    && (await viewer.evaluate(() => window.moqitRoom?.remoteParticipants.size)) === 2, "the viewer's debug stats and window.moqitRoom");
+  log(`viewer ?debug: Alice's tile "${await tile(viewer, "alice-").locator(".moqit-stats").textContent()}"`);
+  await viewer.screenshot({ path: join(shots, "viewer-debug.png") });
   await viewerCtx.close();
   await waitFor(async () => (await alice.locator(".viewers").count()) === 0, "the viewer count to clear");
   log("viewer watched read-only and was counted as a viewer");
