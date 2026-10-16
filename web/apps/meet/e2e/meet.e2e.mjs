@@ -305,6 +305,11 @@ async function scenario(browser) {
   await waitFor(async () => /\d+ (k|M)?bps/.test((await bob.locator(".moqit-meeting-stats").textContent({ timeout: 1000 }).catch(() => "")) ?? "")
     && (await tile(bob, "alice-").locator(".moqit-stats").textContent({ timeout: 1000 }).catch(() => "")).includes("bps"), "Bob to see bitrates despite an old saved setting");
   log(`stats shown: header "${await bob.locator(".moqit-meeting-stats").textContent()}", Alice's tile "${await tile(bob, "alice-").locator(".moqit-stats").textContent()}"`);
+  // Both browsers share this machine's clock, so the tile's latency is real.
+  const latency = () => tile(bob, "alice-").locator(".moqit-stats").getAttribute("data-latency", { timeout: 1000 }).catch(() => null);
+  await waitFor(async () => (await latency()) !== null, "Bob to see Alice's video latency");
+  if (!(Number(await latency()) >= 0 && Number(await latency()) < 1000)) throw new Error(`Alice's video latency out of range: ${await latency()}ms`);
+  log(`latency shown: Alice's video ${await latency()}ms`);
 
   // Chrome's fake microphone plays a beep: the speaking ring proves audio
   // is captured, sent, decoded and measured.

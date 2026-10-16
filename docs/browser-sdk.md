@@ -95,8 +95,11 @@ localVideoTrack.sending();                                 // per layer sent: re
 localVideoTrack.suspended();                               // layers paused because the uplink can't carry them
 room.on("sendLimitedChanged", (limited) => …);
 remoteVideoTrack.bitrate;                                  // also width, height; publication.currentRendition
+remoteVideoTrack.latencyMs;                                // capture to arrival of the latest frame (also on audio)
 remoteAudioTrack.channels;                                 // 2 for stereo, e.g. from the RTMP ingress
 ```
+
+`latencyMs` subtracts the publisher's capture timestamp from this browser's clock, so it is only as accurate as the two clocks agree (NTP-synced machines: usually within tens of ms). For an RTMP ingress stream it counts from the ingress, and for rewound playback it is how far behind live the picture is. With stats shown (`VideoStatsContext`), each remote tile adds it, as the median of recent frames, after the bitrate, and in a `data-latency` attribute.
 
 `high`, `medium` and `low` pick the largest, middle and smallest of however many layers a track has: three for a browser's camera, any number from the [RTMP ingress](https://github.com/MoQ-it/moqit-ingress).
 

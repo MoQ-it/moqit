@@ -14,7 +14,7 @@ import {
   useScreenShares, useTimeline, useVideoTrack,
 } from "./hooks.ts";
 import { gridFit } from "./layout.ts";
-import { formatClock } from "./time.ts";
+import { formatClock, formatLatency } from "./time.ts";
 
 export function RoomProvider({ room, children }: { room: Room; children: ReactNode }) {
   return <RoomContext.Provider value={room}>{children}</RoomContext.Provider>;
@@ -45,12 +45,21 @@ export function formatBitrate(bps: number): string {
 }
 
 /**
- * Remote: the size, layer and bitrate received. Local: each layer being
- * sent, with its size and bitrate (a layer nobody watches is not sent).
+ * Remote: the size, layer, bitrate and latency received. Local: each layer
+ * being sent, with its size and bitrate (a layer nobody watches is not sent).
  */
 function VideoStats({ participant, source, track }: { participant: Participant; source: TrackSource; track: LocalVideoTrack | RemoteVideoTrack }) {
-  const [lines, setLines] = useState<{ text: string; rendition?: string; resolution?: string; bitrate: number; limited?: boolean; target?: number }[]>([]);
+  const [lines, setLines] = useState<{ text: string; rendition?: string; resolution?: string; bitrate: number; limited?: boolean; target?: number; latency?: number }[]>([]);
   useEffect(() => {
+    const latencies: number[] = [];
+    let frames = 0;
+    const sample = () => {
+      const r = track as RemoteVideoTrack;
+      if (participant.isLocal || r.framesDecoded === frames) return;
+      frames = r.framesDecoded;
+      latencies.push(r.latencyMs);
+      if (latencies.length > 5) latencies.shift();
+    };
     const read = () => {
       if (participant.isLocal) {
         const local = track as LocalVideoTrack;
@@ -67,15 +76,25 @@ function VideoStats({ participant, source, track }: { participant: Participant; 
       const r = track as RemoteVideoTrack;
       if (!r.width) return [];
       const layer = (participant as RemoteParticipant).getTrackPublication(source)?.currentRendition;
-      return [{ text: `↓ ${r.width}×${r.height}${layer ? ` · ${layer}` : ""} · ${formatBitrate(r.bitrate)}`, rendition: layer, resolution: `${r.width}x${r.height}`, bitrate: r.bitrate }];
+      const latency = latencies.length ? median(latencies) : undefined;
+      return [{
+        text: `↓ ${r.width}×${r.height}${layer ? ` · ${layer}` : ""} · ${formatBitrate(r.bitrate)}${latency !== undefined ? ` · ${formatLatency(latency)}` : ""}`,
+        rendition: layer, resolution: `${r.width}x${r.height}`, bitrate: r.bitrate, latency,
+      }];
     };
     setLines(read());
+    const sampler = setInterval(sample, 200);
     const id = setInterval(() => setLines(read()), 1000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(sampler);
+      clearInterval(id);
+    };
   }, [participant, source, track]);
   if (lines.length === 0) return null;
   return (
-    <div className="moqit-stats" data-resolution={lines.find((l) => l.resolution)?.resolution} data-bitrate={Math.round(lines.reduce((s, l) => s + l.bitrate, 0))}>
+    <div className="moqit-stats" data-resolution={lines.find((l) => l.resolution)?.resolution} data-bitrate={Math.round(lines.reduce((s, l) => s + l.bitrate, 0))}
+      data-latency={lines[0]?.latency !== undefined ? Math.round(lines[0].latency) : undefined}
+      title={participant.isLocal ? undefined : "latency: capture to arrival, using the sender's and your clocks"}>
       {lines.map((l, i) => (
         <div key={l.rendition ?? i} data-rendition={l.rendition} data-bitrate={Math.round(l.bitrate)} data-limited={l.limited || undefined} data-target={l.target && Math.round(l.target)}>
           {l.text}
@@ -83,6 +102,11 @@ function VideoStats({ participant, source, track }: { participant: Participant; 
       ))}
     </div>
   );
+}
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
 }
 
 /** The meeting's total media bitrate sent (↑) and received (↓). */
