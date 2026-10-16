@@ -248,6 +248,10 @@ export class RemoteVideoTrack {
   private paused = false;
   private inFlight?: { cancel(): void };
   private observers: { disconnect(): void }[] = [];
+  private codec: string;
+  private decodeErrors: number[] = [];
+  private software = false;
+  private waitKey = false;
   /**
    * @internal Lip sync: the capture timestamp of the participant's audible
    * audio, from its audio track.
@@ -264,6 +268,7 @@ export class RemoteVideoTrack {
   onReset?: () => void;
 
   constructor(readonly info: TrackInfo) {
+    this.codec = info.codec;
     this.decoder = this.newDecoder();
   }
 
@@ -274,17 +279,37 @@ export class RemoteVideoTrack {
   private archive = false;
 
   private newDecoder(codec = this.info.codec): VideoDecoder {
-    const d = new VideoDecoder({
+    this.codec = codec;
+    const d: VideoDecoder = new VideoDecoder({
       output: (frame) => {
         this.framesDecoded++;
         this.width = frame.displayWidth;
         this.height = frame.displayHeight;
         this.present(frame);
       },
-      error: (e) => console.warn("moqit: video decoder error", e),
+      error: (e) => {
+        console.warn("moqit: video decoder error", e);
+        if (d === this.decoder && !this.stopped) this.recover();
+      },
     });
-    d.configure({ codec, optimizeForLatency: true });
+    d.configure({ codec, optimizeForLatency: true, ...(this.software ? { hardwareAcceleration: "prefer-software" as const } : {}) });
     return d;
+  }
+
+  // A decoder that fails is closed for good: replace it and resume at a
+  // keyframe. Hardware decoders can fail where software ones don't, so
+  // repeated failures switch to software.
+  private recover() {
+    const now = performance.now();
+    this.decodeErrors = [...this.decodeErrors.filter((t) => now - t < 30000), now];
+    if (this.decodeErrors.length > 5) return; // failing every time, e.g. an unsupported codec
+    if (this.decodeErrors.length >= 2 && !this.software) {
+      this.software = true;
+      console.warn("moqit: video decoding switched to software after repeated errors");
+    }
+    this.decoder = this.newDecoder(this.codec);
+    this.waitKey = true;
+    if (!this.archive && !this.paused) void this.sub?.update({ forward: 1, newGroupRequest: 0 }).catch(() => {});
   }
 
   private resetDecoder(codec?: string) {
@@ -320,6 +345,8 @@ export class RemoteVideoTrack {
     if (!this.archive || this.decoder.state !== "configured") return;
     this.meter.add(payload.byteLength);
     this.latencyMs = (captureClock() - ts) / 1000;
+    if (this.waitKey && !key) return;
+    this.waitKey = false;
     this.decoder.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: ts, data: payload }));
   }
 
@@ -417,6 +444,8 @@ export class RemoteVideoTrack {
       await eachObject(group, (o) => {
         this.meter.add(o.payload.byteLength);
         if (gen !== this.generation || this.paused || this.decoder.state !== "configured") return false;
+        if (this.waitKey && !key) return false; // the rest of this Group can't be decoded
+        this.waitKey = false;
         const ts = timestampOf(o.properties);
         this.latencyMs = (captureClock() - ts) / 1000;
         this.decoder.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: ts, data: o.payload }));

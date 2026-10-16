@@ -56,13 +56,16 @@ Viewers receive participants' broadcast data but not targeted data.
 When the room keeps history (`room.info.dvrWindow > 0`; see [server.md](server.md#rewind-dvr)), a viewer can rewind it, like a live stream:
 - `seek(seconds)` plays every participant from that far behind live, as far back as the history goes, and keeps playing at normal speed from there.
 - `goLive()` returns to the live room.
-- `room.timeline` reports `available`, `live`, `behind` (seconds) and `history` (seconds there are to rewind to); `timelineChanged` fires when it changes.
+- `pause()` freezes every participant where they are, video and audio, and `resume()` plays on from there, so `behind` grows by the time paused. Paused while live, the picture holds at once, and `resume()` plays the recording from that moment. A seek while paused shows the frame there and stays paused; `goLive()` ends the pause.
+- `room.timeline` reports `available`, `live`, `paused`, `behind` (seconds) and `history` (seconds there are to rewind to); `timelineChanged` fires when it changes.
 - `track.rewound` tells whether a remote track is playing history.
 
 ```ts
 if (room.timeline.available) {
   await room.seek(30);          // everyone, 30 s ago, lip-synced
   room.timeline.behind;         // ≈ 30
+  await room.pause();           // hold; room.timeline.paused is true
+  await room.resume();          // on from the same moment
   await room.goLive();
 }
 ```
@@ -135,6 +138,7 @@ await room.localParticipant.setProcessor(TrackSource.CAMERA, blur); // kept when
 **Subscribing:**
 - **Joining a track:** subscribers start at the current group and ask for a fresh keyframe. Switching rendition drops the old one once the new one delivers.
 - **Video rendering:** `MediaStreamTrackGenerator` into a `<video>` element where available, canvas elsewhere.
+- **Decoder failures:** a video decoder that fails (hardware decoders can, mid-stream) is replaced, and the video resumes at a fresh keyframe. A second failure within 30 s switches that track to software decoding; after five, it stops retrying.
 - **Audio playout:** a jitter-buffer AudioWorklet (60 ms target, 200 ms cap) mixed into one `<audio>` element. Stereo tracks (`TrackInfo.channels` 2) play in stereo, mono on both channels.
 
 **Quality:**
@@ -170,7 +174,7 @@ import { ConferenceLayout, ControlBar, RoomProvider, StartAudio } from "@moqit/r
 
 For a viewer, `useParticipants` lists only the remote participants and `useLocalParticipant` returns `undefined`; `useViewerCount` gives the number of viewers.
 
-For a viewer of a room that keeps history, `<Scrubber />` is a rewind bar: a slider over the history, a −10s button and LIVE. It renders nothing otherwise. `useTimeline()` returns `room.timeline` and re-renders every second.
+For a viewer of a room that keeps history, `<Scrubber />` is a rewind bar: a pause / play button, a slider over the history, a −10s button and LIVE. It renders nothing otherwise. `useTimeline()` returns `room.timeline` and re-renders every second.
 
 ```tsx
 <RoomProvider room={room}>

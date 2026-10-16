@@ -18,19 +18,33 @@ export interface Checkpoint {
 /** Archive Group IDs are epoch << 32 | publisher Group. */
 export const epochOf = (group: number): number => Math.floor(group / 2 ** 32);
 
-/** Room-wide playback position in server time (unix µs), running at 1x. */
+/** Room-wide playback position in server time (unix µs), running at 1x unless paused. */
 export class Playhead {
   private base = 0;
   private at = 0;
+  paused = false;
   constructor(private now: () => number = () => performance.now()) {}
 
+  /** Moves to serverUs; a paused playhead stays paused there. */
   start(serverUs: number) {
     this.base = serverUs;
     this.at = this.now();
   }
 
   position(): number {
-    return this.base + (this.now() - this.at) * 1000;
+    return this.paused ? this.base : this.base + (this.now() - this.at) * 1000;
+  }
+
+  pause() {
+    if (this.paused) return;
+    this.base = this.position();
+    this.paused = true;
+  }
+
+  resume() {
+    if (!this.paused) return;
+    this.paused = false;
+    this.at = this.now();
   }
 }
 
@@ -168,13 +182,19 @@ export class ArchivePlayer {
     this.fetch?.cancel();
   }
 
-  /** Waits until the playhead is within lead of t (server µs). */
+  /**
+   * Waits until the playhead is within lead of t (server µs). While paused
+   * no audio passes, and video only up to the paused position, so a seek
+   * while paused shows its frame.
+   */
   private async until(t: number, lead: number): Promise<boolean> {
     for (;;) {
       if (this.stopped) return false;
-      const wait = (t - lead - this.playhead.position()) / 1000;
-      if (wait <= 0) return true;
-      await sleep(Math.min(wait, 1000));
+      const paused = this.playhead.paused;
+      const wait = (t - (paused ? 0 : lead) - this.playhead.position()) / 1000;
+      if (wait <= 0 && !(paused && this.audio)) return true;
+      // Short sleeps while paused, so playing resumes promptly.
+      await sleep(paused ? 50 : Math.min(wait, 1000));
     }
   }
 
@@ -264,6 +284,8 @@ export interface Timeline {
   behind: number;
   /** Seconds of history there is to rewind to, as far as known. */
   history: number;
+  /** Paused (Room.pause): what is shown stays, and behind grows. */
+  paused: boolean;
 }
 
 /** A track Rewind plays history into. */
@@ -280,7 +302,8 @@ export class Rewind {
   readonly playhead = new Playhead();
   active = false;
   private indexes = new Map<string, ParticipantIndex>();
-  private players = new Map<RewindTrack, ArchivePlayer>();
+  // A track waiting for resume after pauseLive has no player yet.
+  private players = new Map<RewindTrack, { start: () => ArchivePlayer; player?: ArchivePlayer }>();
   private offset?: number; // server µs minus local µs, from the newest stored media
   private earliest = 0;
 
@@ -327,51 +350,82 @@ export class Rewind {
     const now = this.serverNow();
     const history = this.earliest ? Math.max(0, (now - this.earliest) / 1e6) : 0;
     const behind = this.active ? Math.max(0, (now - this.playhead.position()) / 1e6) : 0;
-    return { available, live: !this.active, behind, history };
+    return { available, live: !this.active, behind, history, paused: this.active && this.playhead.paused };
   }
 
   /** Plays every track from secondsBehind before live. */
   seek(secondsBehind: number, tracks: { identity: string; source: TrackSource; track: RewindTrack }[]) {
-    const now = this.serverNow();
-    const t = this.earliest ? Math.max(now - secondsBehind * 1e6, this.earliest) : now - secondsBehind * 1e6;
-    for (const p of this.players.values()) p.stop();
-    this.players.clear();
-    this.active = true;
-    this.playhead.start(t);
+    this.moveTo(secondsBehind);
     for (const { identity, source, track } of tracks) this.play(identity, source, track);
   }
 
-  /** Starts one track's history at the playhead. */
-  play(identity: string, source: TrackSource, track: RewindTrack) {
-    this.players.get(track)?.stop();
+  /**
+   * Freezes live tracks as they are shown, paused secondsBehind before
+   * live; their history starts playing from there on resume.
+   */
+  pauseLive(secondsBehind: number, tracks: { identity: string; source: TrackSource; track: RewindTrack }[]) {
+    this.moveTo(secondsBehind);
+    this.playhead.pause();
+    for (const { identity, source, track } of tracks) this.play(identity, source, track, false);
+  }
+
+  /** Plays on from a pause, starting the players pauseLive held back. */
+  resume() {
+    this.playhead.resume();
+    for (const p of this.players.values()) this.run(p);
+  }
+
+  private moveTo(secondsBehind: number) {
+    const now = this.serverNow();
+    const t = this.earliest ? Math.max(now - secondsBehind * 1e6, this.earliest) : now - secondsBehind * 1e6;
+    this.stopAll();
+    this.active = true;
+    this.playhead.start(t);
+  }
+
+  /** Starts one track's history at the playhead, or with start false only takes it off live. */
+  play(identity: string, source: TrackSource, track: RewindTrack, start = true) {
+    this.players.get(track)?.player?.stop();
     track.enterArchive();
     const audio = source === TrackSource.MICROPHONE || source === TrackSource.SCREEN_AUDIO;
-    const player = new ArchivePlayer(this.session, this.ns(identity), source, this.index(identity), this.playhead, {
-      epoch: (e) => track.archiveEpoch(audio ? e?.channels : e?.codec),
-      object: (payload, ts, key) => track.archiveObject(payload, ts, key),
-    }, audio);
-    this.players.set(track, player);
-    void player.run().catch((e) => console.warn("moqit: rewind", e));
+    const entry = {
+      start: () => new ArchivePlayer(this.session, this.ns(identity), source, this.index(identity), this.playhead, {
+        epoch: (e) => track.archiveEpoch(audio ? e?.channels : e?.codec),
+        object: (payload, ts, key) => track.archiveObject(payload, ts, key),
+      }, audio),
+    };
+    this.players.set(track, entry);
+    if (start) this.run(entry);
+  }
+
+  private run(entry: { start: () => ArchivePlayer; player?: ArchivePlayer }) {
+    if (entry.player) return;
+    entry.player = entry.start();
+    void entry.player.run().catch((e) => console.warn("moqit: rewind", e));
   }
 
   /** Stops playing a track's history (it was unsubscribed). */
   drop(track: RewindTrack) {
-    this.players.get(track)?.stop();
+    this.players.get(track)?.player?.stop();
     this.players.delete(track);
   }
 
   /** Returns every track to live. */
   async goLive(): Promise<void> {
     this.active = false;
+    this.playhead.resume();
     const tracks = [...this.players.keys()];
-    for (const p of this.players.values()) p.stop();
-    this.players.clear();
+    this.stopAll();
     await Promise.all(tracks.map((t) => t.leaveArchive()));
+  }
+
+  private stopAll() {
+    for (const p of this.players.values()) p.player?.stop();
+    this.players.clear();
   }
 
   close() {
     this.active = false;
-    for (const p of this.players.values()) p.stop();
-    this.players.clear();
+    this.stopAll();
   }
 }

@@ -244,6 +244,19 @@ async function rewind(viewer) {
   await waitFor(async () => (await framesShown(viewer, "alice-")) >= 5, "rewound video to play");
   const behind = await bar.getAttribute("data-behind");
   await viewer.screenshot({ path: join(shots, "viewer-rewound.png") });
+  // Pause holds the picture; space plays on from where it stopped.
+  await bar.locator(".moqit-pause").click();
+  await waitFor(async () => (await bar.getAttribute("data-paused")) === "true", "the viewer to pause");
+  await new Promise((r) => setTimeout(r, 500));
+  const still = await framesShown(viewer, "alice-");
+  if (still > 1) throw new Error(`video kept playing while paused: ${still} frames in 1.5s`);
+  const pausedAt = Number(await bar.getAttribute("data-behind"));
+  await viewer.screenshot({ path: join(shots, "viewer-paused.png") });
+  await viewer.keyboard.press(" ");
+  await waitFor(async () => (await bar.getAttribute("data-paused")) === "false", "space to play again");
+  await waitFor(async () => (await framesShown(viewer, "alice-")) >= 5, "video to play on after the pause");
+  if (Number(await bar.getAttribute("data-behind")) < pausedAt) throw new Error(`play jumped ahead: ${await bar.getAttribute("data-behind")}s behind, paused at ${pausedAt}s`);
+  log(`viewer paused ${pausedAt}s behind (${still} frames in 1.5s) and played on with space`);
   // ← steps 10s further back, or to the start of the history.
   const history = Number(await bar.locator("input").getAttribute("max"));
   await viewer.keyboard.press("ArrowLeft");

@@ -1,7 +1,7 @@
 import { create, toBinary } from "@bufbuild/protobuf";
 import type { FetchObject, Params, Session } from "@moq-it/moqt";
 import { describe, expect, test } from "vitest";
-import { ArchivePlayer, chunkEnd, type Checkpoint, epochOf, ParticipantIndex, pickStart, Playhead, trackOfSource } from "./dvr.ts";
+import { ArchivePlayer, chunkEnd, type Checkpoint, epochOf, ParticipantIndex, pickStart, Playhead, Rewind, type RewindTrack, trackOfSource } from "./dvr.ts";
 import { DvrCheckpointSchema, DvrEpochSchema, DvrIndexSchema, TrackSource } from "./gen/moqit/v1/models_pb.ts";
 
 const E = 2 ** 32;
@@ -16,7 +16,23 @@ describe("planning", () => {
     expect(p.position()).toBe(5e6 + 250e3);
   });
 
-  test("pickStart takes the last checkpoint at or before t", () => {
+  test("a paused playhead holds its position, also when moved, and runs on from it", () => {
+    let now = 1000;
+    const p = new Playhead(() => now);
+    p.start(5e6);
+    now += 100;
+    p.pause();
+    now += 5000;
+    expect(p.position()).toBe(5.1e6);
+    p.start(2e6); // a seek while paused stays paused
+    now += 1000;
+    expect(p.position()).toBe(2e6);
+    p.resume();
+    now += 250;
+    expect(p.position()).toBe(2.25e6);
+  });
+
+    test("pickStart takes the last checkpoint at or before t", () => {
     const cps = [cp("mic", 1, 10), cp("mic", 2, 20), cp("mic", 3, 30)];
     expect(pickStart(cps, 25)?.group).toBe(2);
     expect(pickStart(cps, 5)?.group).toBe(1);
@@ -121,5 +137,89 @@ describe("ArchivePlayer", () => {
     await run;
     // The second epoch's index lists codec vp8 too; its partial first Group is skipped.
     expect(got).toEqual(["epoch 1 vp8", "k1*@-500", "d1@-480", "k2*@20", "epoch 2 vp8", "k3*@60"]);
+  });
+});
+
+describe("ArchivePlayer paused", () => {
+  // One second of media around t0: a Group per 100 ms, a keyframe and a delta frame each.
+  function setup(t0: number, track: string) {
+    const enc = new TextEncoder();
+    const objs: FetchObject[] = [];
+    const cps: Checkpoint[] = [];
+    for (let i = 0; i < 10; i++) {
+      const at = t0 - 500e3 + i * 100e3;
+      objs.push(obj(E + i, 0, enc.encode(`k${i}`), at), obj(E + i, 1, enc.encode(`d${i}`), at + 50e3));
+      cps.push(cp(track, E + i, at, at));
+    }
+    const minutes = new Map<number, Uint8Array>();
+    for (const c of cps) minutes.set(Math.floor(c.at / 60e6), indexMinute(cps.filter((x) => Math.floor(x.at / 60e6) === Math.floor(c.at / 60e6))));
+    const session = fakeSession(minutes, new Map([[track, objs]]), []);
+    return { session, ix: new ParticipantIndex(session, ["moqit", "r", "p", "a"]) };
+  }
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  test("video decodes up to the paused position, then nothing until resumed", async () => {
+    const t0 = Date.now() * 1000 - 60e6;
+    const { session, ix } = setup(t0, "camera-m");
+    const playhead = new Playhead();
+    playhead.start(t0);
+    playhead.pause();
+    const got: string[] = [];
+    const player = new ArchivePlayer(session, ["moqit", "r", "p", "a"], TrackSource.CAMERA, ix, playhead, { epoch() {}, object: (p) => got.push(new TextDecoder().decode(p)) }, false);
+    const run = player.run();
+    await wait(300);
+    expect(got).toEqual(["k5"]); // the frame at t0, from its keyframe
+    playhead.resume();
+    await wait(250);
+    player.stop();
+    await run;
+    expect(got.slice(0, 4)).toEqual(["k5", "d5", "k6", "d6"]);
+  });
+
+  test("audio plays nothing while paused", async () => {
+    const t0 = Date.now() * 1000 - 60e6;
+    const { session, ix } = setup(t0, "mic");
+    const playhead = new Playhead();
+    playhead.start(t0);
+    playhead.pause();
+    const got: string[] = [];
+    const player = new ArchivePlayer(session, ["moqit", "r", "p", "a"], TrackSource.MICROPHONE, ix, playhead, { epoch() {}, object: (p) => got.push(new TextDecoder().decode(p)) }, true);
+    const run = player.run();
+    await wait(300);
+    expect(got).toEqual([]);
+    playhead.resume();
+    await wait(150);
+    player.stop();
+    await run;
+    expect(got[0]).toBe("k5");
+  });
+});
+
+describe("Rewind", () => {
+  test("pausing live takes tracks off live without fetching; resume plays from the pause; goLive returns them", async () => {
+    const log: string[] = [];
+    const rw = new Rewind(fakeSession(new Map(), new Map(), log), (id) => ["moqit", "r", "p", id]);
+    const calls: string[] = [];
+    const track: RewindTrack = {
+      kind: 1,
+      enterArchive: () => calls.push("enter"),
+      leaveArchive: async () => void calls.push("leave"),
+      archiveEpoch() {},
+      archiveObject() {},
+    };
+    rw.pauseLive(0.3, [{ identity: "a", source: TrackSource.CAMERA, track }]);
+    const at = rw.playhead.position();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls).toEqual(["enter"]);
+    expect(log).toEqual([]);
+    expect(rw.timeline(true)).toMatchObject({ live: false, paused: true });
+    expect(rw.playhead.position()).toBe(at);
+    rw.resume();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(log.some((l) => l.startsWith("dvr "))).toBe(true); // the player reads the index
+    expect(rw.timeline(true).paused).toBe(false);
+    await rw.goLive();
+    expect(calls).toEqual(["enter", "leave"]);
+    expect(rw.timeline(true).live).toBe(true);
   });
 });

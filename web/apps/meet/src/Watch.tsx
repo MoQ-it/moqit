@@ -85,7 +85,7 @@ export function Watch({ room: roomName }: { room: string }) {
   );
 }
 
-/** The rewind bar, for meetings that keep history; ← and → step 10 seconds. */
+/** The rewind bar, for meetings that keep history; space pauses and plays, ← and → step 10 seconds. */
 function RewindBar() {
   const room = useRoom();
   const tl = useTimeline();
@@ -94,7 +94,10 @@ function RewindBar() {
       const el = e.target as HTMLElement | null;
       if (!room.timeline.available || el?.tagName === "INPUT" || el?.tagName === "TEXTAREA") return;
       const behind = room.timeline.behind;
-      if (e.key === "ArrowLeft") void room.seek(behind + 10).catch(() => {});
+      if (e.key === " " && !(el instanceof HTMLButtonElement)) {
+        e.preventDefault();
+        void (room.timeline.paused ? room.resume() : room.pause()).catch(() => {});
+      } else if (e.key === "ArrowLeft") void room.seek(behind + 10).catch(() => {});
       else if (e.key === "ArrowRight") void (behind - 10 < 2 ? room.goLive() : room.seek(behind - 10)).catch(() => {});
     };
     window.addEventListener("keydown", onKey);

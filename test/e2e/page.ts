@@ -3,6 +3,27 @@
 // to end.
 import { type RemoteAudioTrack, type RemoteVideoTrack, Room, TrackSource } from "../../web/packages/client/src/index.ts";
 
+// Failure injection: while failDecodes > 0, a decode() fails the way a
+// hardware decoder can, closing the decoder and reporting an error.
+let failDecodes = 0;
+const RealDecoder = globalThis.VideoDecoder;
+globalThis.VideoDecoder = class extends RealDecoder {
+  private onError: (e: DOMException) => void;
+  constructor(init: VideoDecoderInit) {
+    super(init);
+    this.onError = init.error;
+  }
+  decode(chunk: EncodedVideoChunk) {
+    if (failDecodes > 0 && this.state === "configured") {
+      failDecodes--;
+      this.close();
+      this.onError(new DOMException("injected decoder failure", "EncodingError"));
+      return;
+    }
+    super.decode(chunk);
+  }
+} as typeof VideoDecoder;
+
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const steps: string[] = [];
@@ -62,6 +83,13 @@ async function main() {
     if (Math.abs(mean) > 60) throw new Error(`video out of sync with audio: ${result.avSync}`);
     if (alice.getStats().sendLimited) throw new Error("send-side adaptation limited video on an unshaped connection");
     step(`A/V sync ${result.avSync}`);
+    // A failed decoder is replaced, and after a second failure video goes
+    // on with a software decoder.
+    for (const failures of [1, 1]) {
+      failDecodes = failures;
+      const from = video!.framesDecoded;
+      await until(`video recovers from a decoder failure`, () => failDecodes === 0 && video!.framesDecoded > from + 30, 10000);
+    }
     const mic = alice.localParticipant.tracks.get("microphone") as { encodeDelayMs?: number; sendDelayMs?: number } | undefined;
     result.latency = `video ${Math.round(video!.latencyMs)}ms, audio ${Math.round(audio!.latencyMs)}ms (capture to arrival, same machine); audio encode ${Math.round(mic?.encodeDelayMs ?? -1)}ms, send ${Math.round(mic?.sendDelayMs ?? -1)}ms`;
 
@@ -102,12 +130,48 @@ async function main() {
     step(result.rewind as string);
     if (Math.abs(carolVideo!.latencyMs - 5000) > 2500) throw new Error(`rewound video is not ~5s behind: ${result.rewind}`);
     if (rewoundOffsets.length < 10 || Math.abs(rewoundMean) > 80) throw new Error(`rewound video out of sync with audio: ${result.rewind}`);
+
+    // Pause holds video and audio where they are; resume plays on from there.
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const holds = async (what: string) => {
+      await sleep(300); // frames decoding when paused come out
+      const v = carolVideo!.framesDecoded, a = carolAudio!.framesDecoded, behind = carol.timeline.behind;
+      await sleep(1500);
+      if (carolVideo!.framesDecoded !== v || carolAudio!.framesDecoded > a + 1) {
+        throw new Error(`${what}: media went on while paused (video +${carolVideo!.framesDecoded - v}, audio +${carolAudio!.framesDecoded - a})`);
+      }
+      if (carol.timeline.behind < behind + 1) throw new Error(`${what}: paused but not falling behind (${behind.toFixed(1)}s, then ${carol.timeline.behind.toFixed(1)}s)`);
+      step(`${what}: held at ${carol.timeline.behind.toFixed(1)}s behind`);
+      return behind;
+    };
+    await carol.pause();
+    if (!carol.timeline.paused) throw new Error("timeline not paused");
+    const pausedAt = await holds("paused while rewound");
+    await carol.resume();
+    vmark = carolVideo!.framesDecoded;
+    amark = carolAudio!.framesDecoded;
+    await until("playing on after pause", () => !carol.timeline.paused && carolVideo!.framesDecoded > vmark + 30 && carolAudio!.framesDecoded > amark + 50, 10000);
+    if (carolVideo!.latencyMs < (pausedAt + 1.5) * 1000) throw new Error(`resume jumped ahead: ${Math.round(carolVideo!.latencyMs)}ms behind capture, paused at ${pausedAt.toFixed(1)}s`);
     await carol.goLive();
     vmark = carolVideo!.framesDecoded;
     amark = carolAudio!.framesDecoded;
     await until("back live", () => !carolVideo!.rewound && carolVideo!.framesDecoded > vmark + 30 && carolVideo!.latencyMs < 1500 &&
       carolAudio!.framesDecoded > amark + 50 && carolAudio!.latencyMs < 1500, 20000);
     if (!carol.timeline.live) throw new Error("timeline not live after goLive");
+    // Pausing while live freezes what is shown; resume plays the recording from there.
+    await carol.pause();
+    if (carol.timeline.live || !carol.timeline.paused) throw new Error("pausing while live did not pause");
+    await holds("paused while live");
+    await carol.resume();
+    vmark = carolVideo!.framesDecoded;
+    await until("resumed from the recording, behind live", () => carolVideo!.rewound && carolVideo!.framesDecoded > vmark + 10 && carolVideo!.latencyMs > 2000, 10000);
+    await sleep(500); // past the catch-up from the keyframe before the pause
+    vmark = carolVideo!.framesDecoded;
+    amark = carolAudio!.framesDecoded;
+    await until("playing on after pausing live", () => carolVideo!.framesDecoded > vmark + 20 && carolAudio!.framesDecoded > amark + 40 && carolVideo!.latencyMs > 2000, 10000);
+    await carol.goLive();
+    vmark = carolVideo!.framesDecoded;
+    await until("live again after the pause", () => !carolVideo!.rewound && carolVideo!.framesDecoded > vmark + 30 && carolVideo!.latencyMs < 1500, 20000);
     await carol.disconnect();
     await until("viewer count drops", () => alice.numViewers === 0);
 
@@ -173,7 +237,7 @@ async function main() {
     await bob.disconnect();
     result.ok = true;
   } catch (e) {
-    result.error = String((e as Error)?.stack ?? e);
+    result.error = e instanceof Error ? `${e.message}\n${e.stack}` : String(e); // Firefox stacks omit the message
   }
   await fetch("/result", { method: "POST", body: JSON.stringify(result) });
   window.close();

@@ -323,7 +323,7 @@ export class Room extends Emitter<RoomEvents> {
    */
   get timeline(): Timeline {
     const available = this.isViewer && (this.info?.dvrWindow ?? 0) > 0;
-    return this.rewind?.timeline(available) ?? { available, live: true, behind: 0, history: 0 };
+    return this.rewind?.timeline(available) ?? { available, live: true, behind: 0, history: 0, paused: false };
   }
 
   /**
@@ -334,10 +334,32 @@ export class Room extends Emitter<RoomEvents> {
   async seek(secondsBehindLive: number): Promise<void> {
     if (!this.rewind || !this.timeline.available) throw new Error("rewind is for viewers of rooms that keep history");
     if (secondsBehindLive <= 0) return this.goLive();
-    const tracks = [...this.remoteParticipants.values()].flatMap((p) =>
-      [...p.trackPublications.values()].filter((pub) => pub.track).map((pub) => ({ identity: p.identity, source: pub.source, track: pub.track! })));
-    this.rewind.seek(secondsBehindLive, tracks);
+    this.rewind.seek(secondsBehindLive, this.rewindTracks());
     this.emit("timelineChanged", this.timeline);
+  }
+
+  /**
+   * Viewers only: freezes every participant where they are, video and
+   * audio. resume plays on from there, from the recording, and goLive
+   * catches up. Seeking while paused shows the frame there.
+   */
+  async pause(): Promise<void> {
+    if (!this.rewind || !this.timeline.available) throw new Error("pausing is for viewers of rooms that keep history");
+    if (!this.rewind.active) this.rewind.pauseLive(PAUSE_FROM_LIVE_S, this.rewindTracks());
+    else this.rewind.playhead.pause();
+    this.emit("timelineChanged", this.timeline);
+  }
+
+  /** Viewers only: plays on from where pause stopped. */
+  async resume(): Promise<void> {
+    if (!this.rewind?.active) return;
+    this.rewind.resume();
+    this.emit("timelineChanged", this.timeline);
+  }
+
+  private rewindTracks() {
+    return [...this.remoteParticipants.values()].flatMap((p) =>
+      [...p.trackPublications.values()].filter((pub) => pub.track).map((pub) => ({ identity: p.identity, source: pub.source, track: pub.track! })));
   }
 
   /** Viewers only: returns from history to the live room. */
@@ -607,6 +629,8 @@ export class Room extends Emitter<RoomEvents> {
 }
 
 const VIEWER_ERROR = "viewers cannot publish";
+// What a live viewer sees trails the room's server time by about this much.
+const PAUSE_FROM_LIVE_S = 0.3;
 
 function create_info(identity: string): ParticipantInfo {
   return { identity, sid: "", name: "", state: ParticipantState.JOINED, metadata: "", attributes: {}, tracks: [], joinedAt: 0n, nodeId: "" } as unknown as ParticipantInfo;

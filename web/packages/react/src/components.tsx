@@ -448,8 +448,8 @@ export function StartAudio() {
 
 /**
  * For viewers of a room that keeps history: a bar to rewind it (oldest on
- * the left, live on the right), a 10 seconds back button and a LIVE
- * button. Renders nothing otherwise.
+ * the left, live on the right), pause and play, a 10 seconds back button
+ * and a LIVE button. Renders nothing otherwise.
  */
 export function Scrubber() {
   const room = useRoom();
@@ -469,8 +469,12 @@ export function Scrubber() {
       setDrag(undefined);
     }, 250);
   };
+  const togglePause = () => void (tl.paused ? room.resume() : room.pause()).catch(() => {});
   return (
-    <div className="moqit-scrubber" data-live={tl.live} data-behind={Math.round(tl.behind)}>
+    <div className="moqit-scrubber" data-live={tl.live} data-behind={Math.round(tl.behind)} data-paused={tl.paused}>
+      <button className="moqit-pause" onClick={togglePause} title={tl.paused ? "Play" : "Pause"} aria-label={tl.paused ? "play" : "pause"}>
+        {tl.paused ? "▶" : "⏸"}
+      </button>
       <button className="moqit-back" onClick={() => seek(tl.behind + 10)} title="Back 10 seconds" aria-label="back 10 seconds">
         −10s
       </button>
