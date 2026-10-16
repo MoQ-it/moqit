@@ -34,6 +34,18 @@ go run ./cmd/moqit-server -dev -dvr-dir /var/lib/moqit/dvr -dvr-window 1h
 
 Disk use follows the recorded bitrates: with the browser's 720p camera layer (1.7 Mbps) and microphone, about 0.8 GB per participant-hour (an estimate from the bitrates, not a measurement). Old history is deleted every 30 seconds.
 
+### Troubleshooting connections
+
+`-qlog-dir <dir>` writes a [qlog](https://datatracker.ietf.org/doc/draft-ietf-quic-qlog-main-schema/) file of every QUIC frame for each connection the node accepts, named `<connection id>_server.sqlog`. Each file grows with its connection's traffic (about 7 MB per minute of a 720p viewer), so turn it on only while reproducing a problem. The files open in [qvis](https://qvis.quictools.info/). With the Docker deployment, whose filesystem is read-only, add a writable mount to the `moqit` service for the duration:
+
+```yaml
+    command:
+      - -qlog-dir=/qlog
+      # … the existing flags
+    volumes:
+      - ./qlog:/qlog
+```
+
 ## Access tokens
 
 Tokens are HS256 JWTs signed with an API secret: `iss` is the API key, `sub` the participant identity, and `grants.room` holds the permissions (`join`, `room`, `publish`, `subscribe`, `publishData`, `publishSources`, `updateOwnMetadata`, `hidden`, `viewer`, and `create` / `list` / `admin` for the server API).

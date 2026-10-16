@@ -58,11 +58,13 @@ func main() {
 	dvrMaxBytes := flag.Int64("dvr-max-bytes", 0, "disk the recordings may use; the oldest are deleted first; 0 = no cap")
 	dvrMaxHeight := flag.Int("dvr-max-height", 720, "record the largest video rendition at most this high")
 	dvrFetchLimit := flag.Int("dvr-fetch-limit", 4, "concurrent rewind FETCHes per viewer; 0 = no cap")
+	qlogDir := flag.String("qlog-dir", "", "write a qlog file per QUIC connection into this directory, for troubleshooting; empty = off")
 	webhooks := flag.String("webhook", os.Getenv("MOQIT_WEBHOOK"), "comma-separated URLs receiving webhook events, signed with the first API key (env MOQIT_WEBHOOK)")
 	flag.Parse()
 	webhookURLs = *webhooks
 	clusterCfg = clusterFlags{*redisURL, *nodeID, *advertise, *publicURL, *region}
 	edgeNode, viewerCap, edgeTier = *edge, *maxViewers, *tier
+	qlogPath = *qlogDir
 	dvrCfg = dvrFlags{*dvrDir, *dvrWindow, *dvrMaxWindow, *dvrMaxBytes, *dvrMaxHeight, *dvrFetchLimit}
 
 	level := slog.LevelInfo
@@ -110,7 +112,7 @@ func run(log *slog.Logger, dev bool, udpAddr, httpAddr, keysFlag, certFile, keyF
 
 	cfg := server.Config{UDPAddr: udpAddr, Keys: keys, Certificate: cert, CertFile: certFile, KeyFile: keyFile, DepartureTimeout: departure, Logger: log,
 		AdvertiseAddr: clusterCfg.advertise, PublicURL: clusterCfg.publicURL, Region: clusterCfg.region, ExposeCertHash: dev,
-		Edge: edgeNode, Tier: edgeTier, MaxViewers: viewerCap}
+		Edge: edgeNode, Tier: edgeTier, MaxViewers: viewerCap, QlogDir: qlogPath}
 	if edgeNode && clusterCfg.redis == "" {
 		return errors.New("-edge needs -redis")
 	}
@@ -215,6 +217,8 @@ type dvrFlags struct {
 }
 
 var dvrCfg dvrFlags
+
+var qlogPath string
 
 var (
 	edgeNode  bool

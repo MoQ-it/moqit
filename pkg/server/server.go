@@ -21,6 +21,7 @@ import (
 	mrand "math/rand/v2"
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -91,6 +92,9 @@ type Config struct {
 	DVRMaxWindow  time.Duration
 	DVRMaxHeight  int
 	DVRFetchLimit int
+	// QlogDir, if set, gets a qlog file for every QUIC connection, for
+	// troubleshooting; the files grow with the traffic.
+	QlogDir string
 }
 
 // Server is a running node.
@@ -171,6 +175,13 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		MaxIncomingUniStreams:            1 << 14,
 		MaxIdleTimeout:                   idleTimeout,
 		KeepAlivePeriod:                  keepAlive,
+	}
+	if cfg.QlogDir != "" {
+		if err := os.MkdirAll(cfg.QlogDir, 0o755); err != nil {
+			cancel()
+			return nil, err
+		}
+		qconf.Tracer = qlogTracer(cfg.QlogDir)
 	}
 	h3 := &http3.Server{TLSConfig: tlsConf, QUICConfig: qconf}
 	webtransport.ConfigureHTTP3Server(h3)
