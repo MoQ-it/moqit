@@ -99,14 +99,16 @@ select:disabled { opacity: 0.5; }
   padding: 3px 8px; border-radius: 6px; font-size: 0.85rem;
 }
 .moqit-muted { margin-right: 4px; }
-.moqit-pin, .moqit-fullscreen {
-  position: absolute; top: 8px; left: 8px; padding: 1px 8px; border: none; border-radius: 6px;
+.moqit-tile-actions { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; }
+.moqit-pin, .moqit-mute-for-me, .moqit-fullscreen {
+  padding: 1px 8px; border: none; border-radius: 6px;
   background: rgba(0, 0, 0, 0.55); line-height: 1.5; opacity: 0; transition: opacity 0.15s;
 }
-.moqit-fullscreen { top: auto; left: auto; right: 8px; bottom: 8px; }
-.moqit-tile:hover .moqit-pin, .moqit-tile.pinned .moqit-pin, .moqit-stage:hover .moqit-fullscreen,
-.moqit-pin:focus-visible, .moqit-fullscreen:focus-visible { opacity: 1; }
-@media (hover: none) { .moqit-pin, .moqit-fullscreen { opacity: 1; } }
+.moqit-fullscreen { position: absolute; right: 8px; bottom: 8px; }
+.moqit-mute-for-me.on { background: var(--danger); }
+.moqit-tile:hover .moqit-pin, .moqit-tile.pinned .moqit-pin, .moqit-tile:hover .moqit-mute-for-me, .moqit-mute-for-me.on,
+.moqit-stage:hover .moqit-fullscreen, .moqit-pin:focus-visible, .moqit-mute-for-me:focus-visible, .moqit-fullscreen:focus-visible { opacity: 1; }
+@media (hover: none) { .moqit-pin, .moqit-mute-for-me, .moqit-fullscreen { opacity: 1; } }
 
 .moqit-controls { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .moqit-controls button.off { color: var(--muted); }

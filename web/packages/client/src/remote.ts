@@ -33,7 +33,10 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
 
   constructor(
     info: TrackInfo,
-    private ctx: { session: Session; room: string; identity: string; audio: AudioOutput; adaptive: boolean; audioClock: (video: TrackSource) => number | undefined },
+    private ctx: {
+      session: Session; room: string; identity: string; audio: AudioOutput; adaptive: boolean;
+      audioClock: (video: TrackSource) => number | undefined; volume: (source: TrackSource) => number;
+    },
     private defaultQuality: VideoQuality,
   ) {
     super();
@@ -88,6 +91,7 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
         ? new RemoteAudioTrack(this.info, this.ctx.audio)
         : new RemoteVideoTrack(this.info);
       this.track = track;
+      if (track instanceof RemoteAudioTrack) track.setVolume(this.ctx.volume(this.info.source));
       if (track instanceof RemoteVideoTrack) {
         const source = this.info.source;
         track.audioClock = () => this.ctx.audioClock(source);
@@ -559,6 +563,7 @@ export class RemoteAudioTrack {
   private archive = false;
   private live?: { session: Session; ns: string[]; trackName: string };
   private decoderChannels = 1;
+  private volume = 1;
 
   constructor(readonly info: TrackInfo, private output: AudioOutput) {}
 
@@ -622,6 +627,7 @@ export class RemoteAudioTrack {
   /** @internal */
   async start(session: Session, ns: string[], trackName: string) {
     this.sink = this.output.sink();
+    this.sink.setVolume(this.volume);
     this.decoder = new AudioDecoder({
       output: (data) => {
         this.framesDecoded++;
@@ -681,7 +687,9 @@ export class RemoteAudioTrack {
     }
   }
 
+  /** Playback gain: 0 is silent, 1 as sent. */
   setVolume(v: number) {
+    this.volume = v;
     this.sink?.setVolume(v);
   }
 
@@ -828,10 +836,12 @@ class AudioSink {
   private ctx?: AudioContext;
   private pending: { pcm: Float32Array[]; ts: number }[] = [];
   private playing?: { ts: number; at: number }; // capture ts playing at ctx time `at`
+  private volume = 1;
 
   attach(node: AudioWorkletNode, gain: GainNode, ctx: AudioContext) {
     this.node = node;
     this.gain = gain;
+    gain.gain.value = this.volume;
     this.ctx = ctx;
     node.port.onmessage = (e: MessageEvent<{ playingTs: number; at: number }>) => (this.playing = { ts: e.data.playingTs, at: e.data.at });
     for (const p of this.pending) node.port.postMessage(p, p.pcm.map((c) => c.buffer));
@@ -857,6 +867,7 @@ class AudioSink {
   }
 
   setVolume(v: number) {
+    this.volume = v;
     if (this.gain) this.gain.gain.value = v;
   }
 

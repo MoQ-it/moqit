@@ -24,6 +24,15 @@ await room.localParticipant.publishData(new TextEncoder().encode("hi"), { topic:
 
 Events follow LiveKit's: `participantConnected`, `trackPublished`, `trackSubscribed`, `trackMuted`, `activeSpeakersChanged`, `dataReceived`, `connectionStateChanged` and more (see `RoomEvents` in `room.ts`).
 
+**Muting someone for yourself:** `RemoteParticipant.setVolume` sets how loud a participant's microphone (or, with a source, screen audio) plays on this client; 0 silences it. Nobody else is affected, and the publisher is not told. The audio is still received, so speaking detection and lip sync go on. The setting is kept while the room is in use, also when the participant reconnects or republishes, and `participantVolumeChanged` reports changes.
+
+```ts
+const bob = room.remoteParticipants.get("bob")!;
+bob.setVolume(0);                            // microphone
+bob.setVolume(0, TrackSource.SCREEN_AUDIO);  // screen audio
+bob.getVolume();                             // 0; 1 is as sent
+```
+
 ## Watching as a viewer
 
 With a viewer token (see [clustering.md](clustering.md#edge-nodes-and-viewers)), `connect` watches the room read-only:
@@ -153,7 +162,7 @@ import { ConferenceLayout, ControlBar, RoomProvider, StartAudio } from "@moqit/r
 
 - **`ConferenceLayout`:** shows `GridLayout`, or `FocusLayout` with one tile on the stage: the one the user pinned, else a shared screen. Every tile has a pin button; a pin ends when its participant leaves or stops sharing.
 - **`GridLayout`:** measures its element and uses `gridFit(width, height, n)` to choose the column count that makes the tiles largest while all fit. It sets the tile width as the `--moqit-tile-width` CSS variable, for your stylesheet to apply (Meet: `.moqit-grid > .moqit-tile { flex: 0 0 var(--moqit-tile-width) }` in a wrapping, centred flexbox).
-- **`FocusLayout`:** takes `presenter`, an optional `source` (default `TrackSource.SCREEN`), and optional `onPin` / `onUnpin` callbacks; the stage has a full-screen button. `ParticipantTile` takes `onPin` and `pinned` to show the pin button.
+- **`FocusLayout`:** takes `presenter`, an optional `source` (default `TrackSource.SCREEN`), and optional `onPin` / `onUnpin` callbacks; the stage has a full-screen button. `ParticipantTile` takes `onPin` and `pinned` to show the pin button. A remote participant's camera tile also has a "mute for me" button, which sets both of their audio volumes to 0 or back to 1.
 
 ```tsx
 <FocusLayout presenter={p} source={TrackSource.CAMERA} onUnpin={() => setPinned(undefined)} />

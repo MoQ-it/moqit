@@ -79,6 +79,8 @@ export type RoomEvents = {
   timelineChanged: [Timeline];
   /** Video is sent below the quality asked for because the uplink can't carry it, or no longer is. */
   sendLimitedChanged: [boolean];
+  /** How loud a participant's audio plays here changed (RemoteParticipant.setVolume). */
+  participantVolumeChanged: [RemoteParticipant, TrackSource, number];
 };
 
 export interface RoomOptions {
@@ -143,6 +145,8 @@ export class Room extends Emitter<RoomEvents> {
   info?: RoomInfo;
   localParticipant!: LocalParticipant;
   readonly remoteParticipants = new Map<string, RemoteParticipant>();
+  /** @internal RemoteParticipant.setVolume, by identity and source, so a reconnecting participant keeps it. */
+  readonly volumes = new Map<string, number>();
   /** Participants the server currently hears speaking, loudest first. */
   activeSpeakers: Participant[] = [];
   readonly audio = new AudioOutput();
@@ -593,6 +597,10 @@ export class Room extends Emitter<RoomEvents> {
     this.emit("sendLimitedChanged", limited);
   }
   /** @internal */
+  emitVolume(p: RemoteParticipant, source: TrackSource, volume: number) {
+    this.emit("participantVolumeChanged", p, source, volume);
+  }
+  /** @internal */
   emitLocal(published: boolean, t: LocalTrack) {
     this.emit(published ? "localTrackPublished" : "localTrackUnpublished", t);
   }
@@ -632,7 +640,7 @@ export class RemoteParticipant extends Participant {
         t,
         {
           session: this.room.session!, room: this.room.name, identity: this.identity, audio: this.room.audio,
-          adaptive: this.room.options.adaptiveStream, audioClock: (video) => this.audioClock(video),
+          adaptive: this.room.options.adaptiveStream, audioClock: (video) => this.audioClock(video), volume: (source) => this.getVolume(source),
         },
         this.room.options.videoQuality,
       );
@@ -684,6 +692,25 @@ export class RemoteParticipant extends Participant {
 
   getTrackPublication(source: TrackSource): RemoteTrackPublication | undefined {
     return [...this.trackPublications.values()].find((p) => p.source === source);
+  }
+
+  /**
+   * How loud this participant's microphone (or screen audio) plays here:
+   * 0 is silent, 1 as sent. Only this client is affected, and the setting
+   * stays while the room is in use, also if the participant reconnects.
+   */
+  setVolume(volume: number, source: TrackSource = TrackSource.MICROPHONE) {
+    if (!(volume >= 0) || !Number.isFinite(volume)) throw new RangeError(`invalid volume ${volume}`);
+    if (volume === this.getVolume(source)) return;
+    this.room.volumes.set(`${this.identity}/${source}`, volume);
+    for (const pub of this.trackPublications.values()) {
+      if (pub.source === source && pub.kind === TrackKind.AUDIO) (pub.track as RemoteAudioTrack | undefined)?.setVolume(volume);
+    }
+    this.room.emitVolume(this, source, volume);
+  }
+
+  getVolume(source: TrackSource = TrackSource.MICROPHONE): number {
+    return this.room.volumes.get(`${this.identity}/${source}`) ?? 1;
   }
 
   /** @internal */

@@ -106,9 +106,15 @@ function initials(name: string): string {
   return name.split(/\s+/).map((w) => w[0]?.toUpperCase() ?? "").slice(0, 2).join("");
 }
 
+/** Silences all of a remote participant's audio for this client only, or restores it. */
+function setMutedForMe(p: RemoteParticipant, muted: boolean) {
+  for (const source of [TrackSource.MICROPHONE, TrackSource.SCREEN_AUDIO]) p.setVolume(muted ? 0 : 1, source);
+}
+
 /**
  * A participant's camera or screen. With onPin, a button (and a double
- * click) asks to pin it to the stage, or to unpin it when pinned.
+ * click) asks to pin it to the stage, or to unpin it when pinned. A remote
+ * camera tile has a button muting that participant for this client only.
  */
 export function ParticipantTile({ participant, source = TrackSource.CAMERA, onPin, pinned = false }: {
   participant: Participant; source?: TrackSource; onPin?: () => void; pinned?: boolean;
@@ -125,6 +131,8 @@ export function ParticipantTile({ participant, source = TrackSource.CAMERA, onPi
     : (participant as RemoteParticipant).getTrackPublication(source)?.muted;
   const isScreen = source === TrackSource.SCREEN;
   const showStats = useContext(VideoStatsContext);
+  const remote = participant.isLocal ? undefined : (participant as RemoteParticipant);
+  const mutedForMe = remote?.getVolume() === 0;
   return (
     <div className={`moqit-tile${speaking && !isScreen ? " speaking" : ""}${isScreen ? " screen" : ""}${pinned ? " pinned" : ""}`} data-identity={participant.identity} data-source={isScreen ? "screen" : "camera"}
       onDoubleClick={onPin}>
@@ -139,11 +147,19 @@ export function ParticipantTile({ participant, source = TrackSource.CAMERA, onPi
         {isScreen ? `${name} (screen)` : name}
         {participant.isLocal && !isScreen && " (you)"}
       </div>
-      {onPin && (
-        <button className="moqit-pin" onClick={onPin} aria-label={`${pinned ? "unpin" : "pin"} ${name}${isScreen ? " (screen)" : ""}`} title={pinned ? "Unpin" : "Pin to the stage"}>
-          {pinned ? "✕" : "⤢"}
-        </button>
-      )}
+      <div className="moqit-tile-actions">
+        {onPin && (
+          <button className="moqit-pin" onClick={onPin} aria-label={`${pinned ? "unpin" : "pin"} ${name}${isScreen ? " (screen)" : ""}`} title={pinned ? "Unpin" : "Pin to the stage"}>
+            {pinned ? "✕" : "⤢"}
+          </button>
+        )}
+        {remote && !isScreen && (
+          <button className={`moqit-mute-for-me${mutedForMe ? " on" : ""}`} onClick={() => setMutedForMe(remote, !mutedForMe)} onDoubleClick={(e) => e.stopPropagation()}
+            aria-label={`${mutedForMe ? "unmute" : "mute"} ${name} for me`} aria-pressed={mutedForMe} title={mutedForMe ? "Unmute for me" : "Mute for me (others still hear them)"}>
+            {mutedForMe ? "🔕" : "🔈"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

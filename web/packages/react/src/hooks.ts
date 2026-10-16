@@ -26,7 +26,7 @@ const roomEvents: (keyof RoomEvents)[] = [
   "participantMetadataChanged", "participantNameChanged", "participantAttributesChanged", "trackPublished",
   "trackUnpublished", "trackSubscribed", "trackUnsubscribed", "trackMuted", "trackUnmuted",
   "localTrackPublished", "localTrackUnpublished", "localTrackMutedByServer", "roomMetadataChanged", "activeSpeakersChanged",
-  "activeDeviceChanged", "viewerCountChanged", "timelineChanged",
+  "activeDeviceChanged", "viewerCountChanged", "timelineChanged", "participantVolumeChanged",
 ];
 
 /** Re-renders whenever the room's state changes; read the Room directly. */

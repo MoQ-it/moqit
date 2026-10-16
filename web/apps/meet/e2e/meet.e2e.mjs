@@ -72,6 +72,7 @@ async function join_(browser, url, name, viaHome) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: insecure });
   const page = await ctx.newPage();
   if (name === "Alice") await page.addInitScript(fakeScreen);
+  if (name === "Alice") await page.addInitScript(tapOutput);
   // Bob has a setting saved by an older version (stats were off by default
   // then); stats must show regardless.
   if (name === "Bob") await page.addInitScript(() => {
@@ -146,6 +147,42 @@ function fakeScreen() {
     return s;
   };
 }
+
+// Taps every stream played by an <audio> element (the SDK's output), so a
+// test can measure what reaches the speakers.
+function tapOutput() {
+  const desc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "srcObject");
+  Object.defineProperty(HTMLMediaElement.prototype, "srcObject", {
+    ...desc,
+    set(s) {
+      desc.set.call(this, s);
+      if (!(this instanceof HTMLAudioElement) || !(s instanceof MediaStream)) return;
+      const ctx = new AudioContext();
+      const a = ctx.createAnalyser();
+      a.fftSize = 2048;
+      ctx.createMediaStreamSource(s).connect(a);
+      (window.__outputs ??= []).push(a);
+    },
+  });
+}
+
+/** The loudest RMS level the page plays within ms; -1 without a tapped output. */
+function outputPeak(page, ms = 1500) {
+  return page.evaluate((ms) => new Promise((resolve) => {
+    const taps = window.__outputs ?? [];
+    const buf = new Float32Array(2048);
+    let peak = 0;
+    const id = setInterval(() => {
+      for (const a of taps) {
+        a.getFloatTimeDomainData(buf);
+        peak = Math.max(peak, Math.sqrt(buf.reduce((n, x) => n + x * x, 0) / buf.length));
+      }
+    }, 40);
+    setTimeout(() => (clearInterval(id), resolve(taps.length ? peak : -1)), ms);
+  }), ms);
+}
+const AUDIBLE = 0.01;
+const SILENT = 0.001;
 
 /** Whether the page shows playing video for a participant whose identity starts with prefix. */
 function videoPlaying(page, prefix) {
@@ -494,6 +531,19 @@ const RAW = 0.01;
   log("camera off shown to the other side");
   await bob.screenshot({ path: join(shots, "bob-alice-muted-no-video.png") });
 
+  // Alice mutes Bob for herself: her speakers go silent, though his audio
+  // still arrives (his speaking ring stays). It holds across his refresh.
+  await waitFor(async () => (await outputPeak(alice)) > AUDIBLE, "Alice to hear Bob");
+  const heard = await outputPeak(alice);
+  await alice.getByRole("button", { name: /^mute Bob for me/ }).click();
+  await alice.getByRole("button", { name: /^unmute Bob for me/ }).waitFor({ timeout: 2000 });
+  await new Promise((r) => setTimeout(r, 500)); // audio already past the gain drains from the output
+  const muted = await outputPeak(alice);
+  if (muted > SILENT) throw new Error(`Alice still hears Bob after muting him for herself: level ${muted}`);
+  await waitFor(async () => (await tile(alice, "bob-").getAttribute("class")).includes("speaking"), "Bob's speaking ring to stay while muted for Alice", 5000);
+  await alice.screenshot({ path: join(shots, "alice-mutes-bob.png") });
+  log(`mute for me: Alice heard Bob at ${heard.toFixed(3)}, ${muted.toFixed(4)} once muted`);
+
   // Bob refreshes the page and joins again: Alice must never see a frozen
   // old Bob next to the new one, and he comes back as the same participant.
   const bobId = () => alice.evaluate(() => [...document.querySelectorAll(".moqit-tile[data-source=camera]")].map((t) => t.dataset.identity).filter((i) => i.startsWith("bob-")));
@@ -517,6 +567,12 @@ const RAW = 0.01;
   if (most > 2) throw new Error(`Alice saw ${most} participants while Bob refreshed`);
   if (after.length !== 1 || after[0] !== before) throw new Error(`Bob rejoined as ${after.join(", ")}, was ${before}`);
   log(`refresh: Bob rejoined as the same participant (${before}); Alice never saw a stale Bob`);
+  await waitFor(async () => (await tile(alice, "bob-").getAttribute("class")).includes("speaking"), "Bob's audio to reach Alice after his refresh");
+  const stillMuted = await outputPeak(alice);
+  if (stillMuted > SILENT) throw new Error(`Bob is audible to Alice again after his refresh: level ${stillMuted}`);
+  await alice.getByRole("button", { name: /^unmute Bob for me/ }).click();
+  await waitFor(async () => (await outputPeak(alice)) > AUDIBLE, "Alice to hear Bob once she unmutes him");
+  log("mute for me: kept across Bob's refresh, and undone");
 
   await alice.getByRole("button", { name: "leave" }).click();
   await alice.waitForURL(base + "/");
