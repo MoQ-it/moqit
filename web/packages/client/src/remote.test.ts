@@ -65,3 +65,39 @@ test("a failed video decoder is replaced, resuming at a keyframe, and repeated f
   expect(n).toBe(7); // 2 + five replacements
   expect(current().state).toBe("closed");
 });
+
+test("a subscription superseded while it was being set up is dropped", async () => {
+  FakeDecoder.all = [];
+  vi.stubGlobal("VideoDecoder", FakeDecoder);
+  type FakeSub = { name: string; unsubscribed: boolean; unsubscribe(): void; [Symbol.asyncIterator](): AsyncIterator<never> };
+  const pending: { name: string; resolve: (s: FakeSub) => void }[] = [];
+  const subs: FakeSub[] = [];
+  const session = {
+    subscribe: (track: { name: string }) => new Promise<FakeSub>((resolve) => pending.push({ name: track.name, resolve })),
+  };
+  const make = (name: string): FakeSub => {
+    const s: FakeSub = {
+      name, unsubscribed: false,
+      unsubscribe() { s.unsubscribed = true; },
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+    };
+    subs.push(s);
+    return s;
+  };
+  const track = new RemoteVideoTrack(create(TrackInfoSchema, { sid: "v", kind: TrackKind.VIDEO, source: TrackSource.CAMERA, codec: "vp8" }));
+  const first = track.start(session as never, ["moqit", "r", "p", "a"], "camera-m");
+  const second = track.switchTo("camera-h"); // the element's size came first
+  expect(pending.map((p) => p.name)).toEqual(["camera-m", "camera-h"]);
+  pending[1].resolve(make("camera-h"));
+  pending[0].resolve(make("camera-m"));
+  await Promise.all([first, second]);
+  expect(subs.find((s) => s.name === "camera-m")!.unsubscribed).toBe(true);
+  expect(subs.find((s) => s.name === "camera-h")!.unsubscribed).toBe(false);
+
+  // A stop while subscribing drops the late subscription too.
+  const third = track.switchTo("camera-l");
+  track.stop();
+  pending[2].resolve(make("camera-l"));
+  await third;
+  expect(subs.find((s) => s.name === "camera-l")!.unsubscribed).toBe(true);
+});

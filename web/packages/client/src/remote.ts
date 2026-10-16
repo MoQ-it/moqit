@@ -401,6 +401,12 @@ export class RemoteVideoTrack {
     const gen = ++this.generation;
     this.trackName = trackName;
     const sub = await this.session.subscribe({ namespace: this.ns, name: trackName }, startParams);
+    // Another switch (or stop) began while this one subscribed: this.sub
+    // never held it, so nothing else would end it.
+    if (gen !== this.generation || this.stopped) {
+      sub.unsubscribe();
+      return;
+    }
     this.sub = sub;
     void this.consume(sub, gen, () => old?.unsubscribe()).catch(() => {}).finally(() => {
       // The track ended without our asking: its publisher moved, or the
