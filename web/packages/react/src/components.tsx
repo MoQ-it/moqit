@@ -7,6 +7,7 @@ import {
   type RemoteVideoTrack,
   type Room,
   TrackSource,
+  videoCodecName,
 } from "@moqit/client";
 import { createContext, type CSSProperties, type ReactNode, useContext, useEffect, useRef, useState } from "react";
 import {
@@ -49,7 +50,9 @@ export function formatBitrate(bps: number): string {
  * being sent, with its size and bitrate (a layer nobody watches is not sent).
  */
 function VideoStats({ participant, source, track }: { participant: Participant; source: TrackSource; track: LocalVideoTrack | RemoteVideoTrack }) {
-  const [lines, setLines] = useState<{ text: string; rendition?: string; resolution?: string; bitrate: number; limited?: boolean; target?: number; latency?: number }[]>([]);
+  const [lines, setLines] = useState<{
+    text: string; rendition?: string; track?: string; codec?: string; resolution?: string; bitrate: number; limited?: boolean; target?: number; latency?: number;
+  }[]>([]);
   useEffect(() => {
     const latencies: number[] = [];
     let frames = 0;
@@ -69,17 +72,18 @@ function VideoStats({ participant, source, track }: { participant: Participant; 
         const suspended = local.suspended().map((name) => ({ text: `${name} paused: uplink too slow`, bitrate: 0, limited: true }));
         if (sending.length === 0) return [...captured, ...suspended, { text: "not sent: nobody watching", bitrate: 0 }];
         return [...captured, ...sending.map((r) => ({
-          text: `↑ ${r.rendition} ${r.width}×${r.height} · ${formatBitrate(r.bitrate)}${r.limited ? ` · limited to ${formatBitrate(r.targetBitrate)}${r.framerate < 20 ? ` at ${Math.round(r.framerate)} fps` : ""}` : ""}`,
-          rendition: r.rendition, resolution: `${r.width}x${r.height}`, bitrate: r.bitrate, limited: r.limited, target: r.targetBitrate,
+          text: `↑ ${r.rendition} ${videoCodecName(r.codec)}${r.hardware ? " (hw)" : ""} ${r.width}×${r.height} · ${formatBitrate(r.bitrate)}${r.limited ? ` · limited to ${formatBitrate(r.targetBitrate)}${r.framerate < 20 ? ` at ${Math.round(r.framerate)} fps` : ""}` : ""}`,
+          rendition: r.rendition, track: r.trackName, codec: r.codec, resolution: `${r.width}x${r.height}`, bitrate: r.bitrate, limited: r.limited, target: r.targetBitrate,
         })), ...suspended];
       }
       const r = track as RemoteVideoTrack;
-      if (!r.width) return [];
+      if (!r.width || r.unsupported) return [];
       const layer = (participant as RemoteParticipant).getTrackPublication(source)?.currentRendition;
       const latency = latencies.length ? median(latencies) : undefined;
+      const codec = `${videoCodecName(r.codec)}${r.softwareDecoding ? " (sw)" : ""}`;
       return [{
-        text: `↓ ${r.width}×${r.height}${layer ? ` · ${layer}` : ""} · ${formatBitrate(r.bitrate)}${latency !== undefined ? ` · ${formatLatency(latency)}` : ""}`,
-        rendition: layer, resolution: `${r.width}x${r.height}`, bitrate: r.bitrate, latency,
+        text: `↓ ${r.width}×${r.height}${layer ? ` · ${layer}` : ""} · ${codec} · ${formatBitrate(r.bitrate)}${latency !== undefined ? ` · ${formatLatency(latency)}` : ""}`,
+        rendition: layer, codec: r.codec, resolution: `${r.width}x${r.height}`, bitrate: r.bitrate, latency,
       }];
     };
     setLines(read());
@@ -96,7 +100,7 @@ function VideoStats({ participant, source, track }: { participant: Participant; 
       data-latency={lines[0]?.latency !== undefined ? Math.round(lines[0].latency) : undefined}
       title={participant.isLocal ? undefined : "latency: capture to arrival, using the sender's and your clocks"}>
       {lines.map((l, i) => (
-        <div key={l.rendition ?? i} data-rendition={l.rendition} data-bitrate={Math.round(l.bitrate)} data-limited={l.limited || undefined} data-target={l.target && Math.round(l.target)}>
+        <div key={l.track ?? l.rendition ?? i} data-rendition={l.rendition} data-codec={l.codec} data-bitrate={Math.round(l.bitrate)} data-limited={l.limited || undefined} data-target={l.target && Math.round(l.target)}>
           {l.text}
         </div>
       ))}
@@ -157,6 +161,10 @@ export function ParticipantTile({ participant, source = TrackSource.CAMERA, onPi
   const showStats = useContext(VideoStatsContext);
   const remote = participant.isLocal ? undefined : (participant as RemoteParticipant);
   const mutedForMe = remote?.getVolume() === 0;
+  const pub = remote?.getTrackPublication(source);
+  const undecodable = pub?.unsupported
+    ? [...new Set((pub.info.renditions[0]?.encodings.map((e) => e.codec) ?? [pub.info.codec]).map(videoCodecName))].join(", ")
+    : undefined;
   return (
     <div className={`moqit-tile${speaking && !isScreen ? " speaking" : ""}${isScreen ? " screen" : ""}${pinned ? " pinned" : ""}`} data-identity={participant.identity} data-source={isScreen ? "screen" : "camera"}
       onDoubleClick={onPin}>
@@ -166,6 +174,7 @@ export function ParticipantTile({ participant, source = TrackSource.CAMERA, onPi
         <div className="moqit-avatar">{initials(name)}</div>
       )}
       {showStats && video && !videoMuted && <VideoStats participant={participant} source={source} track={video} />}
+      {undecodable && !videoMuted && <div className="moqit-unsupported" role="status">This browser can't decode this video ({undecodable})</div>}
       <div className="moqit-name">
         {!isScreen && micMuted && <span className="moqit-muted" title="microphone off">🔇</span>}
         {isScreen ? `${name} (screen)` : name}

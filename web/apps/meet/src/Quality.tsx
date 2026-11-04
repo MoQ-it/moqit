@@ -1,6 +1,6 @@
-import { CameraPresets, TrackSource, type VideoQuality, type VideoResolution } from "@moqit/client";
-import { useLocalParticipant, useRoom } from "@moqit/react";
-import { useState } from "react";
+import { CameraPresets, type CodecSupport, TrackSource, type VideoCodecPreference, VideoCodecNames, type VideoQuality, type VideoResolution } from "@moqit/client";
+import { useLocalParticipant, useRoom, useRoomUpdates } from "@moqit/react";
+import { useEffect, useState } from "react";
 import { MenuButton } from "./MenuButton.tsx";
 
 export interface QualityChoices {
@@ -8,6 +8,8 @@ export interface QualityChoices {
   send: VideoResolution;
   /** Layer received of others' video; "auto" fits each video's size on screen. */
   receive: VideoQuality | "auto";
+  /** Codec video is sent in first; "auto" picks from what this device encodes well. */
+  codec: VideoCodecPreference;
   /** Show resolution and bitrate on tiles and the totals in the header. */
   // (Renamed from "stats", which was saved as false while that was the
   // default; the old value is ignored so stats now show by default.)
@@ -15,7 +17,7 @@ export interface QualityChoices {
 }
 
 const QUALITY_KEY = "moqit-quality";
-const DEFAULT_QUALITY: QualityChoices = { send: "720p", receive: "auto", showStats: true };
+const DEFAULT_QUALITY: QualityChoices = { send: "720p", receive: "auto", codec: "auto", showStats: true };
 
 export function savedQuality(): QualityChoices {
   try {
@@ -65,7 +67,21 @@ export function QualityMenu({ value, onChange }: { value: QualityChoices; onChan
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [limited, setLimited] = useState("");
+  const [codecs, setCodecs] = useState<(CodecSupport & { allowed: boolean; failed: boolean })[]>([]);
+  const [fallback, setFallback] = useState("");
+  useRoomUpdates();
+  const allowedKey = room.videoCodecs.join();
+  useEffect(() => {
+    if (!local) return;
+    void local.videoCodecs().then(setCodecs).catch(() => setCodecs([]));
+  }, [local, value.send, allowedKey, fallback]);
+  useEffect(() => {
+    const onFallback = (codec: keyof typeof VideoCodecNames, reason: string) => setFallback(`${VideoCodecNames[codec]} stopped working here (${reason}), so video moved to another codec.`);
+    room.on("videoCodecFallback", onFallback);
+    return () => void room.off("videoCodecFallback", onFallback);
+  }, [room]);
   if (!local) return null;
+  const sending = local.videoCodec;
 
   // The camera may not reach the chosen size (or another tab holds it at a lower one).
   const checkCamera = (send: VideoResolution) => {
@@ -84,6 +100,10 @@ export function QualityMenu({ value, onChange }: { value: QualityChoices; onChan
         checkCamera(next.send);
       }
       if (next.receive !== value.receive) await room.setVideoQuality(next.receive === "auto" ? undefined : next.receive);
+      if (next.codec !== value.codec) {
+        setFallback("");
+        await local.setVideoCodec(next.codec);
+      }
     } catch (e) {
       setError(String((e as Error)?.message ?? e));
     } finally {
@@ -101,10 +121,23 @@ export function QualityMenu({ value, onChange }: { value: QualityChoices; onChan
           {receiveOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
         </select>
       </label>
+      <label className="moqit-device-select">
+        <span>Send codec</span>
+        <select aria-label="send codec" value={value.codec} disabled={busy}
+          onChange={(e) => void apply({ ...value, codec: e.target.value as VideoCodecPreference })}>
+          <option value="auto">Auto{value.codec === "auto" && sending ? ` (${VideoCodecNames[sending]})` : ""}</option>
+          {codecs.filter((c) => (c.encode && c.allowed) || c.codec === value.codec).map((c) => (
+            <option key={c.codec} value={c.codec} disabled={!c.encode || !c.allowed}>
+              {VideoCodecNames[c.codec]}{c.hardware ? " (hardware)" : ""}{c.failed ? " (failed)" : ""}{!c.allowed ? " (not allowed here)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
       <label className="quality-stats">
         <input type="checkbox" aria-label="show stats" checked={value.showStats} onChange={(e) => void apply({ ...value, showStats: e.target.checked })} /> Show resolution and bitrate
       </label>
       {limited && <div className="quality-note">{limited}</div>}
+      {fallback && <div className="quality-note">{fallback}</div>}
       {error && <div className="moqit-device-error">{error}</div>}
     </MenuButton>
   );

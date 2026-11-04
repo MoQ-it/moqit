@@ -3,6 +3,7 @@ package room
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -17,9 +18,15 @@ import (
 // ErrNotFound is returned for unknown rooms, participants and tracks.
 var ErrNotFound = errors.New("not found")
 
+// ErrInvalid is returned for requests with invalid arguments.
+var ErrInvalid = errors.New("invalid argument")
+
 // CreateRoom creates a room ahead of its first participant, or returns the
 // existing one. A room nobody joins closes after EmptyTimeout.
 func (m *Manager) CreateRoom(ctx context.Context, req *moqitv1.CreateRoomRequest) (*moqitv1.Room, error) {
+	if err := CheckVideoCodecs(req.VideoCodecs); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
 	if err := m.waitStarted(ctx); err != nil {
 		return nil, err
 	}
@@ -30,7 +37,7 @@ func (m *Manager) CreateRoom(ctx context.Context, req *moqitv1.CreateRoomRequest
 	settings := &moqitv1.Room{
 		Sid: newID("RM_"), Name: req.Name, Metadata: req.Metadata, CreatedAt: time.Now().UnixMilli(),
 		EmptyTimeout: uint32(empty / time.Second), DepartureTimeout: req.DepartureTimeout, MaxParticipants: req.MaxParticipants,
-		DvrWindow: m.dvrWindow(req.DvrWindow),
+		DvrWindow: m.dvrWindow(req.DvrWindow), VideoCodecs: req.VideoCodecs,
 	}
 	if c := m.cfg.Cluster; c != nil {
 		r, created, err := c.CreateRoom(ctx, settings, empty)
@@ -121,6 +128,19 @@ func (m *Manager) DeleteRoom(ctx context.Context, name string) error {
 
 // UpdateRoomMetadata sets the room's metadata for every participant.
 func (m *Manager) UpdateRoomMetadata(ctx context.Context, name, metadata string) (*moqitv1.Room, error) {
+	return m.updateRoom(ctx, name, func(info *moqitv1.Room) { info.Metadata = metadata }, func(r *Room) { r.setMetadataLocked(metadata) })
+}
+
+// SetRoomVideoCodecs sets the video codecs participants may publish; empty allows all.
+func (m *Manager) SetRoomVideoCodecs(ctx context.Context, name string, codecs []string) (*moqitv1.Room, error) {
+	if err := CheckVideoCodecs(codecs); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	return m.updateRoom(ctx, name, func(info *moqitv1.Room) { info.VideoCodecs = codecs }, func(r *Room) { r.setVideoCodecsLocked(codecs) })
+}
+
+// updateRoom changes the room's shared record (in a cluster) and this node's room.
+func (m *Manager) updateRoom(ctx context.Context, name string, set func(*moqitv1.Room), apply func(*Room)) (*moqitv1.Room, error) {
 	if c := m.cfg.Cluster; c != nil {
 		info, err := c.Room(ctx, name)
 		if err != nil {
@@ -129,14 +149,14 @@ func (m *Manager) UpdateRoomMetadata(ctx context.Context, name, metadata string)
 		if info == nil {
 			return nil, ErrNotFound
 		}
-		info.Metadata = metadata
+		set(info)
 		if err := c.UpdateRoom(ctx, info); err != nil {
 			return nil, err
 		}
 		// Nodes ignore their own events, so apply it here directly.
 		if r := m.Room(name); r != nil {
 			r.mu.Lock()
-			r.setMetadataLocked(metadata)
+			apply(r)
 			r.mu.Unlock()
 		}
 		return info, nil
@@ -146,7 +166,7 @@ func (m *Manager) UpdateRoomMetadata(ctx context.Context, name, metadata string)
 		return nil, ErrNotFound
 	}
 	r.mu.Lock()
-	r.setMetadataLocked(metadata)
+	apply(r)
 	r.mu.Unlock()
 	return r.roomInfo(), nil
 }

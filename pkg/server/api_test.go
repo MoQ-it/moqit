@@ -172,6 +172,28 @@ func TestRoomServiceAcrossCluster(t *testing.T) {
 	}
 	waitFor(t, "room metadata on both nodes", func() bool { return alice.RoomMetadata() == "m1" && bob.RoomMetadata() == "m1" })
 
+	// A codec policy set through node A holds for bob's tracks on node B.
+	if _, err := apiA.SetRoomVideoCodecs(ctx, connect.NewRequest(&moqitv1.SetRoomVideoCodecsRequest{Room: "r1", VideoCodecs: []string{"vp8"}})); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []*testclient.Client{alice, bob} {
+		c.WaitRoom("vp8-only policy", func(r *moqitv1.Room) bool { return slices.Equal(r.VideoCodecs, []string{"vp8"}) && r.Metadata == "m1" })
+	}
+	camera := func(codec string) *moqitv1.ClientSignal {
+		return &moqitv1.ClientSignal{Signal: &moqitv1.ClientSignal_SetTracks{SetTracks: &moqitv1.SetTracks{Tracks: []*moqitv1.TrackInfo{{
+			Name: "camera", Kind: moqitv1.TrackKind_TRACK_KIND_VIDEO, Source: moqitv1.TrackSource_TRACK_SOURCE_CAMERA, Codec: codec,
+			Renditions: []*moqitv1.Rendition{{TrackName: "camera-m", Width: 640, Height: 360}},
+		}}}}}
+	}
+	if r := bob.Send(camera("av01.0.05M.08")); r.Result != moqitv1.RequestResult_REQUEST_RESULT_NOT_ALLOWED {
+		t.Errorf("av1 camera under a vp8-only policy: %v", r)
+	}
+	if r := bob.Send(camera("vp8")); r.Result != moqitv1.RequestResult_REQUEST_RESULT_OK {
+		t.Errorf("vp8 camera under a vp8-only policy: %v", r)
+	}
+	_, err = apiB.SetRoomVideoCodecs(ctx, connect.NewRequest(&moqitv1.SetRoomVideoCodecsRequest{Room: "r1", VideoCodecs: []string{"theora"}}))
+	wantCode(t, "unknown codec", err, connect.CodeInvalidArgument)
+
 	// Remove bob (on node B) through node A.
 	if _, err := apiA.RemoveParticipant(ctx, connect.NewRequest(&moqitv1.RemoveParticipantRequest{Room: "r1", Identity: "bob"})); err != nil {
 		t.Fatal(err)

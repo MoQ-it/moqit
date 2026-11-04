@@ -28,7 +28,8 @@ type CreateRoomRequest struct {
 	DepartureTimeout uint32                 `protobuf:"varint,3,opt,name=departure_timeout,json=departureTimeout,proto3" json:"departure_timeout,omitempty"` // seconds the room lives on after the last participant; 0 = default
 	MaxParticipants  uint32                 `protobuf:"varint,4,opt,name=max_participants,json=maxParticipants,proto3" json:"max_participants,omitempty"`    // 0 = unlimited
 	Metadata         string                 `protobuf:"bytes,5,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	DvrWindow        uint32                 `protobuf:"varint,6,opt,name=dvr_window,json=dvrWindow,proto3" json:"dvr_window,omitempty"` // seconds of history viewers can rewind; 0 = the server default
+	DvrWindow        uint32                 `protobuf:"varint,6,opt,name=dvr_window,json=dvrWindow,proto3" json:"dvr_window,omitempty"`      // seconds of history viewers can rewind; 0 = the server default
+	VideoCodecs      []string               `protobuf:"bytes,7,rep,name=video_codecs,json=videoCodecs,proto3" json:"video_codecs,omitempty"` // video codecs participants may publish; empty = all
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -103,6 +104,13 @@ func (x *CreateRoomRequest) GetDvrWindow() uint32 {
 		return x.DvrWindow
 	}
 	return 0
+}
+
+func (x *CreateRoomRequest) GetVideoCodecs() []string {
+	if x != nil {
+		return x.VideoCodecs
+	}
+	return nil
 }
 
 type CreateRoomResponse struct {
@@ -1108,11 +1116,109 @@ func (x *WebhookEvent) GetTrack() *TrackInfo {
 	return nil
 }
 
+// Sets the video codecs participants may publish. Publishers move off
+// codecs no longer allowed; tracks announcing one are refused.
+type SetRoomVideoCodecsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Room          string                 `protobuf:"bytes,1,opt,name=room,proto3" json:"room,omitempty"`
+	VideoCodecs   []string               `protobuf:"bytes,2,rep,name=video_codecs,json=videoCodecs,proto3" json:"video_codecs,omitempty"` // "h264", "h265", "vp8", "vp9", "av1"; empty = all
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetRoomVideoCodecsRequest) Reset() {
+	*x = SetRoomVideoCodecsRequest{}
+	mi := &file_moqit_v1_room_service_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetRoomVideoCodecsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetRoomVideoCodecsRequest) ProtoMessage() {}
+
+func (x *SetRoomVideoCodecsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_moqit_v1_room_service_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetRoomVideoCodecsRequest.ProtoReflect.Descriptor instead.
+func (*SetRoomVideoCodecsRequest) Descriptor() ([]byte, []int) {
+	return file_moqit_v1_room_service_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *SetRoomVideoCodecsRequest) GetRoom() string {
+	if x != nil {
+		return x.Room
+	}
+	return ""
+}
+
+func (x *SetRoomVideoCodecsRequest) GetVideoCodecs() []string {
+	if x != nil {
+		return x.VideoCodecs
+	}
+	return nil
+}
+
+type SetRoomVideoCodecsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Room          *Room                  `protobuf:"bytes,1,opt,name=room,proto3" json:"room,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetRoomVideoCodecsResponse) Reset() {
+	*x = SetRoomVideoCodecsResponse{}
+	mi := &file_moqit_v1_room_service_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetRoomVideoCodecsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetRoomVideoCodecsResponse) ProtoMessage() {}
+
+func (x *SetRoomVideoCodecsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_moqit_v1_room_service_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetRoomVideoCodecsResponse.ProtoReflect.Descriptor instead.
+func (*SetRoomVideoCodecsResponse) Descriptor() ([]byte, []int) {
+	return file_moqit_v1_room_service_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *SetRoomVideoCodecsResponse) GetRoom() *Room {
+	if x != nil {
+		return x.Room
+	}
+	return nil
+}
+
 var File_moqit_v1_room_service_proto protoreflect.FileDescriptor
 
 const file_moqit_v1_room_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1bmoqit/v1/room_service.proto\x12\bmoqit.v1\x1a\x15moqit/v1/models.proto\"\xdf\x01\n" +
+	"\x1bmoqit/v1/room_service.proto\x12\bmoqit.v1\x1a\x15moqit/v1/models.proto\"\x82\x02\n" +
 	"\x11CreateRoomRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rempty_timeout\x18\x02 \x01(\rR\femptyTimeout\x12+\n" +
@@ -1120,7 +1226,8 @@ const file_moqit_v1_room_service_proto_rawDesc = "" +
 	"\x10max_participants\x18\x04 \x01(\rR\x0fmaxParticipants\x12\x1a\n" +
 	"\bmetadata\x18\x05 \x01(\tR\bmetadata\x12\x1d\n" +
 	"\n" +
-	"dvr_window\x18\x06 \x01(\rR\tdvrWindow\"8\n" +
+	"dvr_window\x18\x06 \x01(\rR\tdvrWindow\x12!\n" +
+	"\fvideo_codecs\x18\a \x03(\tR\vvideoCodecs\"8\n" +
 	"\x12CreateRoomResponse\x12\"\n" +
 	"\x04room\x18\x01 \x01(\v2\x0e.moqit.v1.RoomR\x04room\"(\n" +
 	"\x10ListRoomsRequest\x12\x14\n" +
@@ -1185,7 +1292,12 @@ const file_moqit_v1_room_service_proto_rawDesc = "" +
 	"created_at\x18\x03 \x01(\x03R\tcreatedAt\x12\"\n" +
 	"\x04room\x18\x04 \x01(\v2\x0e.moqit.v1.RoomR\x04room\x12;\n" +
 	"\vparticipant\x18\x05 \x01(\v2\x19.moqit.v1.ParticipantInfoR\vparticipant\x12)\n" +
-	"\x05track\x18\x06 \x01(\v2\x13.moqit.v1.TrackInfoR\x05track2\xbb\x06\n" +
+	"\x05track\x18\x06 \x01(\v2\x13.moqit.v1.TrackInfoR\x05track\"R\n" +
+	"\x19SetRoomVideoCodecsRequest\x12\x12\n" +
+	"\x04room\x18\x01 \x01(\tR\x04room\x12!\n" +
+	"\fvideo_codecs\x18\x02 \x03(\tR\vvideoCodecs\"@\n" +
+	"\x1aSetRoomVideoCodecsResponse\x12\"\n" +
+	"\x04room\x18\x01 \x01(\v2\x0e.moqit.v1.RoomR\x04room2\x9c\a\n" +
 	"\vRoomService\x12G\n" +
 	"\n" +
 	"CreateRoom\x12\x1b.moqit.v1.CreateRoomRequest\x1a\x1c.moqit.v1.CreateRoomResponse\x12D\n" +
@@ -1198,7 +1310,8 @@ const file_moqit_v1_room_service_proto_rawDesc = "" +
 	"\x11RemoveParticipant\x12\".moqit.v1.RemoveParticipantRequest\x1a#.moqit.v1.RemoveParticipantResponse\x12\\\n" +
 	"\x11UpdateParticipant\x12\".moqit.v1.UpdateParticipantRequest\x1a#.moqit.v1.UpdateParticipantResponse\x12D\n" +
 	"\tMuteTrack\x12\x1a.moqit.v1.MuteTrackRequest\x1a\x1b.moqit.v1.MuteTrackResponse\x12A\n" +
-	"\bSendData\x12\x19.moqit.v1.SendDataRequest\x1a\x1a.moqit.v1.SendDataResponseB0Z.github.com/MoQ-it/moqit/proto/moqit/v1;moqitv1b\x06proto3"
+	"\bSendData\x12\x19.moqit.v1.SendDataRequest\x1a\x1a.moqit.v1.SendDataResponse\x12_\n" +
+	"\x12SetRoomVideoCodecs\x12#.moqit.v1.SetRoomVideoCodecsRequest\x1a$.moqit.v1.SetRoomVideoCodecsResponseB0Z.github.com/MoQ-it/moqit/proto/moqit/v1;moqitv1b\x06proto3"
 
 var (
 	file_moqit_v1_room_service_proto_rawDescOnce sync.Once
@@ -1212,7 +1325,7 @@ func file_moqit_v1_room_service_proto_rawDescGZIP() []byte {
 	return file_moqit_v1_room_service_proto_rawDescData
 }
 
-var file_moqit_v1_room_service_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_moqit_v1_room_service_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_moqit_v1_room_service_proto_goTypes = []any{
 	(*CreateRoomRequest)(nil),          // 0: moqit.v1.CreateRoomRequest
 	(*CreateRoomResponse)(nil),         // 1: moqit.v1.CreateRoomResponse
@@ -1235,49 +1348,54 @@ var file_moqit_v1_room_service_proto_goTypes = []any{
 	(*SendDataRequest)(nil),            // 18: moqit.v1.SendDataRequest
 	(*SendDataResponse)(nil),           // 19: moqit.v1.SendDataResponse
 	(*WebhookEvent)(nil),               // 20: moqit.v1.WebhookEvent
-	nil,                                // 21: moqit.v1.UpdateParticipantRequest.AttributesEntry
-	(*Room)(nil),                       // 22: moqit.v1.Room
-	(*ParticipantInfo)(nil),            // 23: moqit.v1.ParticipantInfo
-	(*ParticipantPermission)(nil),      // 24: moqit.v1.ParticipantPermission
-	(*TrackInfo)(nil),                  // 25: moqit.v1.TrackInfo
+	(*SetRoomVideoCodecsRequest)(nil),  // 21: moqit.v1.SetRoomVideoCodecsRequest
+	(*SetRoomVideoCodecsResponse)(nil), // 22: moqit.v1.SetRoomVideoCodecsResponse
+	nil,                                // 23: moqit.v1.UpdateParticipantRequest.AttributesEntry
+	(*Room)(nil),                       // 24: moqit.v1.Room
+	(*ParticipantInfo)(nil),            // 25: moqit.v1.ParticipantInfo
+	(*ParticipantPermission)(nil),      // 26: moqit.v1.ParticipantPermission
+	(*TrackInfo)(nil),                  // 27: moqit.v1.TrackInfo
 }
 var file_moqit_v1_room_service_proto_depIdxs = []int32{
-	22, // 0: moqit.v1.CreateRoomResponse.room:type_name -> moqit.v1.Room
-	22, // 1: moqit.v1.ListRoomsResponse.rooms:type_name -> moqit.v1.Room
-	22, // 2: moqit.v1.UpdateRoomMetadataResponse.room:type_name -> moqit.v1.Room
-	23, // 3: moqit.v1.ListParticipantsResponse.participants:type_name -> moqit.v1.ParticipantInfo
-	23, // 4: moqit.v1.GetParticipantResponse.participant:type_name -> moqit.v1.ParticipantInfo
-	21, // 5: moqit.v1.UpdateParticipantRequest.attributes:type_name -> moqit.v1.UpdateParticipantRequest.AttributesEntry
-	24, // 6: moqit.v1.UpdateParticipantRequest.permission:type_name -> moqit.v1.ParticipantPermission
-	23, // 7: moqit.v1.UpdateParticipantResponse.participant:type_name -> moqit.v1.ParticipantInfo
-	22, // 8: moqit.v1.WebhookEvent.room:type_name -> moqit.v1.Room
-	23, // 9: moqit.v1.WebhookEvent.participant:type_name -> moqit.v1.ParticipantInfo
-	25, // 10: moqit.v1.WebhookEvent.track:type_name -> moqit.v1.TrackInfo
-	0,  // 11: moqit.v1.RoomService.CreateRoom:input_type -> moqit.v1.CreateRoomRequest
-	2,  // 12: moqit.v1.RoomService.ListRooms:input_type -> moqit.v1.ListRoomsRequest
-	4,  // 13: moqit.v1.RoomService.DeleteRoom:input_type -> moqit.v1.DeleteRoomRequest
-	6,  // 14: moqit.v1.RoomService.UpdateRoomMetadata:input_type -> moqit.v1.UpdateRoomMetadataRequest
-	8,  // 15: moqit.v1.RoomService.ListParticipants:input_type -> moqit.v1.ListParticipantsRequest
-	10, // 16: moqit.v1.RoomService.GetParticipant:input_type -> moqit.v1.GetParticipantRequest
-	12, // 17: moqit.v1.RoomService.RemoveParticipant:input_type -> moqit.v1.RemoveParticipantRequest
-	14, // 18: moqit.v1.RoomService.UpdateParticipant:input_type -> moqit.v1.UpdateParticipantRequest
-	16, // 19: moqit.v1.RoomService.MuteTrack:input_type -> moqit.v1.MuteTrackRequest
-	18, // 20: moqit.v1.RoomService.SendData:input_type -> moqit.v1.SendDataRequest
-	1,  // 21: moqit.v1.RoomService.CreateRoom:output_type -> moqit.v1.CreateRoomResponse
-	3,  // 22: moqit.v1.RoomService.ListRooms:output_type -> moqit.v1.ListRoomsResponse
-	5,  // 23: moqit.v1.RoomService.DeleteRoom:output_type -> moqit.v1.DeleteRoomResponse
-	7,  // 24: moqit.v1.RoomService.UpdateRoomMetadata:output_type -> moqit.v1.UpdateRoomMetadataResponse
-	9,  // 25: moqit.v1.RoomService.ListParticipants:output_type -> moqit.v1.ListParticipantsResponse
-	11, // 26: moqit.v1.RoomService.GetParticipant:output_type -> moqit.v1.GetParticipantResponse
-	13, // 27: moqit.v1.RoomService.RemoveParticipant:output_type -> moqit.v1.RemoveParticipantResponse
-	15, // 28: moqit.v1.RoomService.UpdateParticipant:output_type -> moqit.v1.UpdateParticipantResponse
-	17, // 29: moqit.v1.RoomService.MuteTrack:output_type -> moqit.v1.MuteTrackResponse
-	19, // 30: moqit.v1.RoomService.SendData:output_type -> moqit.v1.SendDataResponse
-	21, // [21:31] is the sub-list for method output_type
-	11, // [11:21] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	24, // 0: moqit.v1.CreateRoomResponse.room:type_name -> moqit.v1.Room
+	24, // 1: moqit.v1.ListRoomsResponse.rooms:type_name -> moqit.v1.Room
+	24, // 2: moqit.v1.UpdateRoomMetadataResponse.room:type_name -> moqit.v1.Room
+	25, // 3: moqit.v1.ListParticipantsResponse.participants:type_name -> moqit.v1.ParticipantInfo
+	25, // 4: moqit.v1.GetParticipantResponse.participant:type_name -> moqit.v1.ParticipantInfo
+	23, // 5: moqit.v1.UpdateParticipantRequest.attributes:type_name -> moqit.v1.UpdateParticipantRequest.AttributesEntry
+	26, // 6: moqit.v1.UpdateParticipantRequest.permission:type_name -> moqit.v1.ParticipantPermission
+	25, // 7: moqit.v1.UpdateParticipantResponse.participant:type_name -> moqit.v1.ParticipantInfo
+	24, // 8: moqit.v1.WebhookEvent.room:type_name -> moqit.v1.Room
+	25, // 9: moqit.v1.WebhookEvent.participant:type_name -> moqit.v1.ParticipantInfo
+	27, // 10: moqit.v1.WebhookEvent.track:type_name -> moqit.v1.TrackInfo
+	24, // 11: moqit.v1.SetRoomVideoCodecsResponse.room:type_name -> moqit.v1.Room
+	0,  // 12: moqit.v1.RoomService.CreateRoom:input_type -> moqit.v1.CreateRoomRequest
+	2,  // 13: moqit.v1.RoomService.ListRooms:input_type -> moqit.v1.ListRoomsRequest
+	4,  // 14: moqit.v1.RoomService.DeleteRoom:input_type -> moqit.v1.DeleteRoomRequest
+	6,  // 15: moqit.v1.RoomService.UpdateRoomMetadata:input_type -> moqit.v1.UpdateRoomMetadataRequest
+	8,  // 16: moqit.v1.RoomService.ListParticipants:input_type -> moqit.v1.ListParticipantsRequest
+	10, // 17: moqit.v1.RoomService.GetParticipant:input_type -> moqit.v1.GetParticipantRequest
+	12, // 18: moqit.v1.RoomService.RemoveParticipant:input_type -> moqit.v1.RemoveParticipantRequest
+	14, // 19: moqit.v1.RoomService.UpdateParticipant:input_type -> moqit.v1.UpdateParticipantRequest
+	16, // 20: moqit.v1.RoomService.MuteTrack:input_type -> moqit.v1.MuteTrackRequest
+	18, // 21: moqit.v1.RoomService.SendData:input_type -> moqit.v1.SendDataRequest
+	21, // 22: moqit.v1.RoomService.SetRoomVideoCodecs:input_type -> moqit.v1.SetRoomVideoCodecsRequest
+	1,  // 23: moqit.v1.RoomService.CreateRoom:output_type -> moqit.v1.CreateRoomResponse
+	3,  // 24: moqit.v1.RoomService.ListRooms:output_type -> moqit.v1.ListRoomsResponse
+	5,  // 25: moqit.v1.RoomService.DeleteRoom:output_type -> moqit.v1.DeleteRoomResponse
+	7,  // 26: moqit.v1.RoomService.UpdateRoomMetadata:output_type -> moqit.v1.UpdateRoomMetadataResponse
+	9,  // 27: moqit.v1.RoomService.ListParticipants:output_type -> moqit.v1.ListParticipantsResponse
+	11, // 28: moqit.v1.RoomService.GetParticipant:output_type -> moqit.v1.GetParticipantResponse
+	13, // 29: moqit.v1.RoomService.RemoveParticipant:output_type -> moqit.v1.RemoveParticipantResponse
+	15, // 30: moqit.v1.RoomService.UpdateParticipant:output_type -> moqit.v1.UpdateParticipantResponse
+	17, // 31: moqit.v1.RoomService.MuteTrack:output_type -> moqit.v1.MuteTrackResponse
+	19, // 32: moqit.v1.RoomService.SendData:output_type -> moqit.v1.SendDataResponse
+	22, // 33: moqit.v1.RoomService.SetRoomVideoCodecs:output_type -> moqit.v1.SetRoomVideoCodecsResponse
+	23, // [23:34] is the sub-list for method output_type
+	12, // [12:23] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_moqit_v1_room_service_proto_init() }
@@ -1293,7 +1411,7 @@ func file_moqit_v1_room_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_moqit_v1_room_service_proto_rawDesc), len(file_moqit_v1_room_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   22,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -444,6 +444,35 @@ const RAW = 0.01;
   if (JSON.parse(await bob.evaluate(() => localStorage.getItem("moqit-quality"))).receive !== "auto") throw new Error("receive quality not saved");
   log("quality: send 720p → 1080p → 360p live; receive high / low / auto");
 
+  // Send codec: Alice switches codec live from the Quality menu, and Bob's
+  // tile follows; Auto returns to the automatic choice.
+  const codecOptions = await (async () => {
+    await alice.getByRole("button", { name: "quality" }).click();
+    const values = await alice.locator('select[aria-label="send codec"] option:not([disabled])').evaluateAll((os) => os.map((o) => o.value));
+    await alice.keyboard.press("Escape");
+    return values;
+  })();
+  const bobCodec = () => tile(bob, "alice-").locator(".moqit-stats div[data-codec]").first().getAttribute("data-codec", { timeout: 1000 }).catch(() => null);
+  const family = { h264: "avc1", h265: "hev1", vp8: "vp8", vp9: "vp09", av1: "av01" };
+  const switched = [];
+  for (const codec of ["vp8", "av1", "h264"].filter((c) => codecOptions.includes(c))) {
+    await quality(alice, "send codec", codec);
+    await waitFor(async () => (await bobCodec())?.startsWith(family[codec]), `Bob to receive Alice in ${codec}`, 20000);
+    await waitFor(async () => (await alice.locator('.moqit-tile[data-identity^="alice-"] .moqit-stats').first().textContent()).includes(codec === "h264" ? "H.264" : codec.toUpperCase()),
+      `Alice's tile to show ${codec}`, 10000);
+    switched.push(codec);
+  }
+  if (switched.length < 2) throw new Error(`too few codecs offered to switch between: ${codecOptions}`);
+  await quality(alice, "send codec", "auto");
+  if (JSON.parse(await alice.evaluate(() => localStorage.getItem("moqit-quality"))).codec !== "auto") throw new Error("codec choice not saved");
+  // Auto may pick a hardware codec on this machine: Bob follows whichever Alice sends first.
+  const aliceCodec = () => alice.locator('.moqit-tile[data-identity^="alice-"] .moqit-stats div[data-rendition="camera-h"][data-codec]').first().getAttribute("data-codec", { timeout: 1000 }).catch(() => null);
+  await waitFor(async () => {
+    const [a, b] = [await aliceCodec(), await bobCodec()];
+    return a && b && a.slice(0, 4) === b.slice(0, 4);
+  }, "Bob to receive Alice's automatic codec", 20000);
+  log(`send codec: offered ${codecOptions.join(", ")}; switched live through ${switched.join(" → ")} and back to auto`);
+
   // Screen share: Bob sees Alice's screen on the stage; Alice sees the
   // presenter card instead of a mirror of her own screen.
   await alice.getByRole("button", { name: "screen share" }).click();

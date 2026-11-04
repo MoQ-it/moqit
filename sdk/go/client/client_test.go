@@ -260,3 +260,94 @@ func TestParticipant(t *testing.T) {
 	p2.Close("done")
 	bob.WaitState("enc2 left", func(s map[string]*moqitv1.ParticipantInfo) bool { return s["enc2"] == nil })
 }
+
+func TestEncodings(t *testing.T) {
+	for in, want := range map[[2]string]string{
+		{"camera-h", "av01.0.05M.08"}: "camera-h.av1", {"camera-h", "avc1.42e01f"}: "camera-h.avc", {"screen-l", "hev1.1.6.L93.B0"}: "screen-l.hevc",
+		{"camera-m", "vp9"}: "camera-m.vp9", {"camera-m", "vp8"}: "camera-m.vp8", {"mic", "opus"}: "mic",
+	} {
+		if got := client.EncodingTrackName(in[0], in[1]); got != want {
+			t.Errorf("EncodingTrackName(%q, %q) = %q, want %q", in[0], in[1], got, want)
+		}
+	}
+
+	ctx := context.Background()
+	cert, err := server.SelfSignedCert("localhost,127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := server.Start(ctx, server.Config{UDPAddr: "127.0.0.1:0", Keys: auth.KeyProvider{apiKey: apiSecret}, Certificate: cert})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	addr := "127.0.0.1:" + n.Port()
+	cfg := client.Config{URL: "https://" + addr + "/moq", Insecure: true}
+	camera := func(codecs ...string) []*moqitv1.TrackInfo {
+		r := &moqitv1.Rendition{TrackName: client.EncodingTrackName("camera-m", codecs[0]), Width: 640, Height: 360}
+		for _, c := range codecs {
+			r.Encodings = append(r.Encodings, &moqitv1.VideoEncoding{TrackName: client.EncodingTrackName("camera-m", c), Codec: c})
+		}
+		return []*moqitv1.TrackInfo{{Name: "camera", Kind: moqitv1.TrackKind_TRACK_KIND_VIDEO, Source: moqitv1.TrackSource_TRACK_SOURCE_CAMERA,
+			Codec: codecs[0], Renditions: []*moqitv1.Rendition{r}}}
+	}
+	encodings := func(s map[string]*moqitv1.ParticipantInfo) []string {
+		var out []string
+		if e := s["enc"]; e != nil && len(e.Tracks) == 1 {
+			for _, enc := range e.Tracks[0].Renditions[0].Encodings {
+				out = append(out, enc.TrackName)
+			}
+		}
+		return out
+	}
+
+	p, err := client.Join(ctx, cfg, token(t, "enc", auth.RoomGrant{Join: true}), camera("avc1.42e01f", "vp8"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close("done")
+	bob := testclient.Join(t, addr, "r1", "bob", token(t, "bob", auth.RoomGrant{Join: true}))
+	bob.WaitState("enc's encodings", func(s map[string]*moqitv1.ParticipantInfo) bool {
+		return slices.Equal(encodings(s), []string{"camera-m.avc", "camera-m.vp8"})
+	})
+
+	// Only the encoding subscribed to needs encoding.
+	vp8 := p.Track("camera-m.vp8")
+	sub := fromGroupStart(t, bob, "camera-m.vp8")
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); !ok(); time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s never true", what)
+			}
+		}
+	}
+	waitFor("vp8 subscribed", vp8.Subscribed)
+	if p.Track("camera-m.avc").Subscribed() {
+		t.Error("avc subscribed without a subscriber")
+	}
+	vp8.WriteVideo(time.Now(), true, []byte("vp8 k0"))
+	var sg *moqt.IncomingSubgroup
+	if _, o := next(t, sub, &sg); string(o.Payload) != "vp8 k0" {
+		t.Fatalf("got %q", o.Payload)
+	}
+
+	// Switching to AV1 drops the H.264 track and keeps VP8's subscribers.
+	if err := p.SetTracks(ctx, camera("av01.0.05M.08", "vp8")); err != nil {
+		t.Fatal(err)
+	}
+	bob.WaitState("AV1 first", func(s map[string]*moqitv1.ParticipantInfo) bool {
+		return slices.Equal(encodings(s), []string{"camera-m.av1", "camera-m.vp8"}) && s["enc"].Tracks[0].Codec == "av01.0.05M.08"
+	})
+	if p.Track("camera-m.avc") != nil || p.Track("camera-m.av1") == nil || p.Track("camera-m.vp8") != vp8 {
+		t.Fatal("tracks after the switch")
+	}
+	vp8.WriteVideo(time.Now(), true, []byte("vp8 k1"))
+	sg = nil
+	if _, o := next(t, sub, &sg); string(o.Payload) != "vp8 k1" {
+		t.Fatalf("got %q after the switch", o.Payload)
+	}
+	if err := p.SetTracks(ctx, append(camera("vp8"), camera("vp8")...)); err == nil {
+		t.Error("SetTracks with a repeated track name")
+	}
+}

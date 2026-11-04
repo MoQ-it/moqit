@@ -9,6 +9,11 @@
 //	mic := p.Track("mic")
 //	mic.WriteAudio(time.Now(), level, opusFrame) // for each 20 ms frame
 //	p.Close("done")
+//
+// Video can be offered in several codecs: list each rendition's
+// Encodings, one MoQ track each (see EncodingTrackName), and each
+// subscriber takes the first it can decode. Write only to tracks whose
+// Subscribed is true, and change codecs live with SetTracks.
 package client
 
 import (
@@ -39,12 +44,12 @@ type Participant struct {
 	moqt.RejectAll
 	room, identity string
 	log            *slog.Logger
-	tracks         map[string]*Track // by MoQ track name
 	signal         chan *moqt.TrackWriter
 
 	sess *moqt.Session
 
 	mu      sync.Mutex
+	tracks  map[string]*Track // by MoQ track name
 	infos   []*moqitv1.TrackInfo
 	sigSG   *moqt.OutgoingSubgroup
 	sigObj  uint64
@@ -54,8 +59,9 @@ type Participant struct {
 }
 
 // Join connects with a participant token, joins its room and declares
-// tracks; each rendition gets a Track to write to. The node verifies the
-// token; here it is only read for the room and identity.
+// tracks; each rendition (and each of its encodings) gets a Track to write
+// to. The node verifies the token; here it is only read for the room and
+// identity.
 func Join(ctx context.Context, cfg Config, token string, tracks []*moqitv1.TrackInfo) (*Participant, error) {
 	var c auth.Claims
 	if _, _, err := jwt.NewParser().ParseUnverified(token, &c); err != nil {
@@ -71,17 +77,10 @@ func Join(ctx context.Context, cfg Config, token string, tracks []*moqitv1.Track
 	}
 	p := &Participant{room: g.Room, identity: c.Identity(), log: log, tracks: map[string]*Track{},
 		signal: make(chan *moqt.TrackWriter, 1), pending: map[uint64]chan *moqitv1.RequestResponse{}, sids: map[string]string{}}
-	for _, t := range tracks {
-		p.infos = append(p.infos, proto.CloneOf(t))
-		for _, r := range t.Renditions {
-			if r.TrackName == "" || p.tracks[r.TrackName] != nil {
-				return nil, fmt.Errorf("client: track %q: missing or repeated rendition track name %q", t.Name, r.TrackName)
-			}
-			tr := newTrack(r.TrackName, t.Kind == moqitv1.TrackKind_TRACK_KIND_AUDIO)
-			tr.onChange = p.trackChanged
-			p.tracks[r.TrackName] = tr
-		}
+	if _, err := moqTracks(tracks); err != nil {
+		return nil, err
 	}
+	p.replaceTracks(tracks)
 	if err := p.join(ctx, cfg, token); err != nil {
 		return nil, err
 	}
@@ -94,8 +93,74 @@ func (p *Participant) Room() string { return p.room }
 // Identity is the participant's identity.
 func (p *Participant) Identity() string { return p.identity }
 
-// Track returns the Track for a rendition's track name, or nil.
-func (p *Participant) Track(name string) *Track { return p.tracks[name] }
+// Track returns the Track for a rendition's (or encoding's) track name, or nil.
+func (p *Participant) Track(name string) *Track {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.tracks[name]
+}
+
+// EncodingTrackName is the MoQ track of a rendition in a codec (a
+// WebCodecs codec string or a name such as "av1"): "camera-h.av1".
+func EncodingTrackName(rendition, codec string) string {
+	return room.EncodingTrackName(rendition, codec)
+}
+
+// moqTracks lists every MoQ track name declared, checking they are unique.
+func moqTracks(tracks []*moqitv1.TrackInfo) (map[string]bool, error) {
+	names := map[string]bool{}
+	for _, t := range tracks {
+		for _, r := range t.Renditions {
+			for _, e := range room.Encodings(t, r) {
+				if e.TrackName == "" || names[e.TrackName] {
+					return nil, fmt.Errorf("client: track %q: missing or repeated rendition track name %q", t.Name, e.TrackName)
+				}
+				names[e.TrackName] = true
+			}
+		}
+	}
+	return names, nil
+}
+
+// replaceTracks makes tracks the declared ones: new names get a Track,
+// kept ones keep theirs (and their subscribers), others end.
+func (p *Participant) replaceTracks(tracks []*moqitv1.TrackInfo) {
+	names, _ := moqTracks(tracks)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.infos = nil
+	for _, t := range tracks {
+		p.infos = append(p.infos, proto.CloneOf(t))
+		for _, r := range t.Renditions {
+			for _, e := range room.Encodings(t, r) {
+				if p.tracks[e.TrackName] == nil {
+					tr := newTrack(e.TrackName, t.Kind == moqitv1.TrackKind_TRACK_KIND_AUDIO)
+					tr.onChange = p.trackChanged
+					tr.setMuted(t.Muted)
+					p.tracks[e.TrackName] = tr
+				}
+			}
+		}
+	}
+	for name, tr := range p.tracks {
+		if !names[name] {
+			tr.close()
+			delete(p.tracks, name)
+		}
+	}
+}
+
+// SetTracks replaces the declared tracks, e.g. to offer video in another
+// codec: renditions and encodings kept by track name keep their Track and
+// subscribers, new ones get a Track (see Track), and dropped ones end.
+// Track names must stay unique; the room may refuse codecs it doesn't allow.
+func (p *Participant) SetTracks(ctx context.Context, tracks []*moqitv1.TrackInfo) error {
+	if _, err := moqTracks(tracks); err != nil {
+		return err
+	}
+	p.replaceTracks(tracks)
+	return p.setTracks(ctx)
+}
 
 // Context ends when the participant leaves the room: on Close, when the
 // server removes it or another session takes its identity, or when the
@@ -105,12 +170,18 @@ func (p *Participant) Context() context.Context { return p.sess.Context() }
 // Close ends every track, waits briefly for queued objects to be sent and
 // leaves the room.
 func (p *Participant) Close(reason string) {
+	p.mu.Lock()
+	tracks := make([]*Track, 0, len(p.tracks))
 	for _, t := range p.tracks {
+		tracks = append(tracks, t)
+	}
+	p.mu.Unlock()
+	for _, t := range tracks {
 		t.close()
 	}
 	done := make(chan struct{})
 	go func() {
-		for _, t := range p.tracks {
+		for _, t := range tracks {
 			t.running.Wait()
 		}
 		close(done)
@@ -130,8 +201,10 @@ func (p *Participant) trackChanged(track, event string, attrs ...any) {
 	p.mu.Lock()
 	for _, info := range p.infos {
 		for _, r := range info.Renditions {
-			if p.tracks[r.TrackName].sending() {
-				sending = append(sending, r.TrackName)
+			for _, e := range room.Encodings(info, r) {
+				if t := p.tracks[e.TrackName]; t != nil && t.Subscribed() {
+					sending = append(sending, e.TrackName)
+				}
 			}
 		}
 	}
@@ -149,7 +222,7 @@ func (p *Participant) HandleSubscribe(r *moqt.SubscribeRequest) {
 		}
 		return
 	}
-	if t := p.tracks[r.Track.Name]; t != nil {
+	if t := p.Track(r.Track.Name); t != nil {
 		t.subscribe(r)
 		return
 	}
@@ -271,8 +344,10 @@ func (p *Participant) mute(sid string, muted bool) {
 	}
 	info.Muted = muted
 	for _, r := range info.Renditions {
-		if t := p.tracks[r.TrackName]; t != nil {
-			t.setMuted(muted)
+		for _, e := range room.Encodings(info, r) {
+			if t := p.tracks[e.TrackName]; t != nil {
+				t.setMuted(muted)
+			}
 		}
 	}
 	p.mu.Unlock()

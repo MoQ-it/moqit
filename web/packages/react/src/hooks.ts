@@ -27,6 +27,7 @@ const roomEvents: (keyof RoomEvents)[] = [
   "trackUnpublished", "trackSubscribed", "trackUnsubscribed", "trackMuted", "trackUnmuted",
   "localTrackPublished", "localTrackUnpublished", "localTrackMutedByServer", "roomMetadataChanged", "activeSpeakersChanged",
   "activeDeviceChanged", "viewerCountChanged", "timelineChanged", "participantVolumeChanged",
+  "trackUnsupported", "videoCodecFallback", "roomVideoCodecsChanged",
 ];
 
 /** Re-renders whenever the room's state changes; read the Room directly. */

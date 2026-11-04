@@ -2,6 +2,7 @@ package room
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -57,6 +58,7 @@ func newRoom(m *Manager, name string, settings *moqitv1.Room) *Room {
 	if settings != nil {
 		info.DvrWindow = settings.DvrWindow
 		info.Metadata, info.EmptyTimeout = settings.Metadata, settings.EmptyTimeout
+		info.VideoCodecs = settings.VideoCodecs
 		if settings.DepartureTimeout > 0 {
 			info.DepartureTimeout = settings.DepartureTimeout
 		}
@@ -135,6 +137,7 @@ func (r *Room) joinCluster(ctx context.Context) error {
 	r.mu.Lock()
 	r.info.Sid, r.info.CreatedAt, r.info.Metadata, r.info.EmptyTimeout = info.Sid, info.CreatedAt, info.Metadata, info.EmptyTimeout
 	r.info.DvrWindow = info.DvrWindow
+	r.info.VideoCodecs = info.VideoCodecs
 	if info.DepartureTimeout > 0 {
 		r.info.DepartureTimeout = info.DepartureTimeout
 	}
@@ -219,15 +222,24 @@ func (r *Room) applyEvent(ev *moqitv1.ClusterRoomEvent) {
 	case *moqitv1.ClusterRoomEvent_ParticipantLeft:
 		r.applyRemoteLeftLocked(e.ParticipantLeft)
 	case *moqitv1.ClusterRoomEvent_RoomUpdated:
-		r.setMetadataLocked(e.RoomUpdated.Metadata)
+		r.setSettingsLocked(e.RoomUpdated.Metadata, e.RoomUpdated.VideoCodecs)
 	}
 }
 
 func (r *Room) setMetadataLocked(md string) {
-	if r.info.Metadata == md {
+	r.setSettingsLocked(md, r.info.VideoCodecs)
+}
+
+func (r *Room) setVideoCodecsLocked(codecs []string) {
+	r.setSettingsLocked(r.info.Metadata, codecs)
+}
+
+// setSettingsLocked applies the room's admin-set fields, telling everyone if they changed.
+func (r *Room) setSettingsLocked(md string, codecs []string) {
+	if r.info.Metadata == md && slices.Equal(r.info.VideoCodecs, codecs) {
 		return
 	}
-	r.info.Metadata = md
+	r.info.Metadata, r.info.VideoCodecs = md, slices.Clone(codecs)
 	r.publishLocked(&moqitv1.RoomStateUpdate{Update: &moqitv1.RoomStateUpdate_RoomUpdated{RoomUpdated: proto.CloneOf(r.info)}})
 }
 

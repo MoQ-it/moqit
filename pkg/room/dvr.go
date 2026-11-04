@@ -41,6 +41,15 @@ type recording struct {
 	w     *dvr.Writer
 	stop  func()
 	start time.Time
+	codec string // codec family recorded; a change starts a new epoch
+}
+
+// recCodec is what must stay the same for an epoch to continue.
+func recCodec(t *moqitv1.TrackInfo) string {
+	if f := VideoCodecOf(t.Codec); f != "" {
+		return f
+	}
+	return t.Codec
 }
 
 // dvrRecorder feeds a Writer and reports when the upstream ends.
@@ -108,7 +117,7 @@ func (m *Manager) syncRecordings(r *Room, identity string) {
 	var stale []*recording
 	for k, rec := range m.recs {
 		if k.room == r.name && k.identity == identity {
-			if _, ok := want[k.track]; !ok {
+			if c, ok := want[k.track]; !ok || rec.codec != recCodec(c.track) {
 				stale = append(stale, rec)
 				delete(m.recs, k)
 			}
@@ -118,7 +127,7 @@ func (m *Manager) syncRecordings(r *Room, identity string) {
 	for name := range want {
 		k := recKey{r.name, identity, name}
 		if m.recs[k] == nil {
-			m.recs[k] = &recording{}
+			m.recs[k] = &recording{codec: recCodec(want[name].track)}
 			start = append(start, k)
 		}
 	}

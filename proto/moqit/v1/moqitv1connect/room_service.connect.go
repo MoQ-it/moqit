@@ -58,6 +58,9 @@ const (
 	RoomServiceMuteTrackProcedure = "/moqit.v1.RoomService/MuteTrack"
 	// RoomServiceSendDataProcedure is the fully-qualified name of the RoomService's SendData RPC.
 	RoomServiceSendDataProcedure = "/moqit.v1.RoomService/SendData"
+	// RoomServiceSetRoomVideoCodecsProcedure is the fully-qualified name of the RoomService's
+	// SetRoomVideoCodecs RPC.
+	RoomServiceSetRoomVideoCodecsProcedure = "/moqit.v1.RoomService/SetRoomVideoCodecs"
 )
 
 // RoomServiceClient is a client for the moqit.v1.RoomService service.
@@ -72,6 +75,7 @@ type RoomServiceClient interface {
 	UpdateParticipant(context.Context, *connect.Request[v1.UpdateParticipantRequest]) (*connect.Response[v1.UpdateParticipantResponse], error)
 	MuteTrack(context.Context, *connect.Request[v1.MuteTrackRequest]) (*connect.Response[v1.MuteTrackResponse], error)
 	SendData(context.Context, *connect.Request[v1.SendDataRequest]) (*connect.Response[v1.SendDataResponse], error)
+	SetRoomVideoCodecs(context.Context, *connect.Request[v1.SetRoomVideoCodecsRequest]) (*connect.Response[v1.SetRoomVideoCodecsResponse], error)
 }
 
 // NewRoomServiceClient constructs a client for the moqit.v1.RoomService service. By default, it
@@ -145,6 +149,12 @@ func NewRoomServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(roomServiceMethods.ByName("SendData")),
 			connect.WithClientOptions(opts...),
 		),
+		setRoomVideoCodecs: connect.NewClient[v1.SetRoomVideoCodecsRequest, v1.SetRoomVideoCodecsResponse](
+			httpClient,
+			baseURL+RoomServiceSetRoomVideoCodecsProcedure,
+			connect.WithSchema(roomServiceMethods.ByName("SetRoomVideoCodecs")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -160,6 +170,7 @@ type roomServiceClient struct {
 	updateParticipant  *connect.Client[v1.UpdateParticipantRequest, v1.UpdateParticipantResponse]
 	muteTrack          *connect.Client[v1.MuteTrackRequest, v1.MuteTrackResponse]
 	sendData           *connect.Client[v1.SendDataRequest, v1.SendDataResponse]
+	setRoomVideoCodecs *connect.Client[v1.SetRoomVideoCodecsRequest, v1.SetRoomVideoCodecsResponse]
 }
 
 // CreateRoom calls moqit.v1.RoomService.CreateRoom.
@@ -212,6 +223,11 @@ func (c *roomServiceClient) SendData(ctx context.Context, req *connect.Request[v
 	return c.sendData.CallUnary(ctx, req)
 }
 
+// SetRoomVideoCodecs calls moqit.v1.RoomService.SetRoomVideoCodecs.
+func (c *roomServiceClient) SetRoomVideoCodecs(ctx context.Context, req *connect.Request[v1.SetRoomVideoCodecsRequest]) (*connect.Response[v1.SetRoomVideoCodecsResponse], error) {
+	return c.setRoomVideoCodecs.CallUnary(ctx, req)
+}
+
 // RoomServiceHandler is an implementation of the moqit.v1.RoomService service.
 type RoomServiceHandler interface {
 	CreateRoom(context.Context, *connect.Request[v1.CreateRoomRequest]) (*connect.Response[v1.CreateRoomResponse], error)
@@ -224,6 +240,7 @@ type RoomServiceHandler interface {
 	UpdateParticipant(context.Context, *connect.Request[v1.UpdateParticipantRequest]) (*connect.Response[v1.UpdateParticipantResponse], error)
 	MuteTrack(context.Context, *connect.Request[v1.MuteTrackRequest]) (*connect.Response[v1.MuteTrackResponse], error)
 	SendData(context.Context, *connect.Request[v1.SendDataRequest]) (*connect.Response[v1.SendDataResponse], error)
+	SetRoomVideoCodecs(context.Context, *connect.Request[v1.SetRoomVideoCodecsRequest]) (*connect.Response[v1.SetRoomVideoCodecsResponse], error)
 }
 
 // NewRoomServiceHandler builds an HTTP handler from the service implementation. It returns the path
@@ -293,6 +310,12 @@ func NewRoomServiceHandler(svc RoomServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(roomServiceMethods.ByName("SendData")),
 		connect.WithHandlerOptions(opts...),
 	)
+	roomServiceSetRoomVideoCodecsHandler := connect.NewUnaryHandler(
+		RoomServiceSetRoomVideoCodecsProcedure,
+		svc.SetRoomVideoCodecs,
+		connect.WithSchema(roomServiceMethods.ByName("SetRoomVideoCodecs")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/moqit.v1.RoomService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case RoomServiceCreateRoomProcedure:
@@ -315,6 +338,8 @@ func NewRoomServiceHandler(svc RoomServiceHandler, opts ...connect.HandlerOption
 			roomServiceMuteTrackHandler.ServeHTTP(w, r)
 		case RoomServiceSendDataProcedure:
 			roomServiceSendDataHandler.ServeHTTP(w, r)
+		case RoomServiceSetRoomVideoCodecsProcedure:
+			roomServiceSetRoomVideoCodecsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -362,4 +387,8 @@ func (UnimplementedRoomServiceHandler) MuteTrack(context.Context, *connect.Reque
 
 func (UnimplementedRoomServiceHandler) SendData(context.Context, *connect.Request[v1.SendDataRequest]) (*connect.Response[v1.SendDataResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("moqit.v1.RoomService.SendData is not implemented"))
+}
+
+func (UnimplementedRoomServiceHandler) SetRoomVideoCodecs(context.Context, *connect.Request[v1.SetRoomVideoCodecsRequest]) (*connect.Response[v1.SetRoomVideoCodecsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("moqit.v1.RoomService.SetRoomVideoCodecs is not implemented"))
 }

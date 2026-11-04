@@ -64,8 +64,9 @@ func newTrack(name string, audio bool) *Track {
 // Name is the MoQ track name, a Rendition's TrackName.
 func (t *Track) Name() string { return t.name }
 
-// sending reports whether any subscriber receives objects.
-func (t *Track) sending() bool {
+// Subscribed reports whether any subscriber receives objects; a publisher
+// offering several encodings need only encode those subscribed.
+func (t *Track) Subscribed() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.active > 0

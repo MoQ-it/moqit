@@ -25,6 +25,7 @@ service RoomService {
   rpc UpdateParticipant(UpdateParticipantRequest) returns (UpdateParticipantResponse);
   rpc MuteTrack(MuteTrackRequest) returns (MuteTrackResponse);
   rpc SendData(SendDataRequest) returns (SendDataResponse);
+  rpc SetRoomVideoCodecs(SetRoomVideoCodecsRequest) returns (SetRoomVideoCodecsResponse);
 }
 
 message CreateRoomRequest {
@@ -34,6 +35,7 @@ message CreateRoomRequest {
   uint32 max_participants = 4; // 0 = unlimited
   string metadata = 5;
   uint32 dvr_window = 6; // seconds of history viewers can rewind; 0 = the server default
+  repeated string video_codecs = 7; // video codecs participants may publish; empty = all
 }
 
 message CreateRoomResponse {
@@ -128,4 +130,15 @@ message WebhookEvent {
   Room room = 4;
   ParticipantInfo participant = 5;
   TrackInfo track = 6;
+}
+
+// Sets the video codecs participants may publish. Publishers move off
+// codecs no longer allowed; tracks announcing one are refused.
+message SetRoomVideoCodecsRequest {
+  string room = 1;
+  repeated string video_codecs = 2; // "h264", "h265", "vp8", "vp9", "av1"; empty = all
+}
+
+message SetRoomVideoCodecsResponse {
+  Room room = 1;
 }

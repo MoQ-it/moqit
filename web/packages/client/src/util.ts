@@ -142,59 +142,7 @@ export function qualityIndex(q: VideoQuality, n: number): number {
   return q === "high" ? 0 : q === "low" ? n - 1 : Math.ceil((n - 1) / 2);
 }
 
-export function videoEncoderConfig(codec: string, width: number, height: number, bitrate: number, framerate: number): VideoEncoderConfig {
-  const c: VideoEncoderConfig = { codec, width, height, bitrate, framerate, latencyMode: "realtime" };
-  // Annex B keeps SPS/PPS in-band on keyframes, so decoders need no description.
-  if (codec.startsWith("avc1")) c.avc = { format: "annexb" };
-  return c;
-}
-
-/**
- * Picks the publisher's video codec. Firefox's H.264 encoder adds over a
- * second of latency even in realtime mode (moqit Phase 0), so it prefers
- * VP8 there; elsewhere H.264 is hardware-accelerated.
- */
-// H.264 levels: [level_idc, max frame size in macroblocks, max macroblocks/s].
-const AVC_LEVELS: [number, number, number][] = [
-  [0x1f, 3600, 108000], // 3.1: 1280x720@30
-  [0x20, 5120, 216000], // 3.2
-  [0x28, 8192, 245760], // 4.0: 1920x1080@30
-  [0x2a, 8704, 522240], // 4.2
-  [0x32, 22080, 589824], // 5.0
-  [0x33, 36864, 983040], // 5.1: 4096x2160@30
-  [0x34, 36864, 2073600], // 5.2
-];
-
-/**
- * The codec string to publish for a set of renditions. H.264 encoders
- * refuse sizes above the level in the codec string (avc1.PPCCLL), so the
- * level is raised to fit the largest rendition; other codecs pass through.
- */
-export function codecForRenditions(codec: string, specs: { width: number; height: number; framerate: number }[]): string {
-  const m = /^(avc1\.[0-9a-f]{4})[0-9a-f]{2}$/i.exec(codec);
-  if (!m || specs.length === 0) return codec;
-  let fs = 0, mbps = 0;
-  for (const s of specs) {
-    const mbs = Math.ceil(s.width / 16) * Math.ceil(s.height / 16);
-    fs = Math.max(fs, mbs);
-    mbps = Math.max(mbps, mbs * s.framerate);
-  }
-  const level = AVC_LEVELS.find(([, maxFs, maxMbps]) => fs <= maxFs && mbps <= maxMbps) ?? AVC_LEVELS[AVC_LEVELS.length - 1];
-  return m[1] + Math.max(level[0], parseInt(codec.slice(-2), 16)).toString(16).padStart(2, "0");
-}
-
-export async function pickVideoCodec(): Promise<string> {
-  const firefox = /Firefox\//.test(navigator.userAgent);
-  const prefs = firefox ? ["vp8", "vp09.00.10.08", "avc1.42e01f"] : ["avc1.42e01f", "vp8", "vp09.00.10.08"];
-  for (const codec of prefs) {
-    try {
-      if ((await VideoEncoder.isConfigSupported(videoEncoderConfig(codec, 1280, 720, 1_000_000, 30))).supported) return codec;
-    } catch {
-      // try the next one
-    }
-  }
-  throw new Error("no supported video encoder");
-}
+export { codecForRenditions, pickVideoCodec, videoEncoderConfig } from "./codecs.ts";
 
 /** Decodes the payload of a JWT without verifying it. */
 export function jwtClaims(token: string): { sub?: string; grants?: { room?: { room?: string; viewer?: boolean } } } {

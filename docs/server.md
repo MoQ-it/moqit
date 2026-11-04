@@ -79,7 +79,7 @@ go run ./cmd/moqit token -room standup -identity obs -sources camera,microphone 
 |---|---|
 | CreateRoom, DeleteRoom | `create` |
 | ListRooms | `list` |
-| UpdateRoomMetadata, List/Get/Remove/UpdateParticipant, MuteTrack, SendData | `admin` for the room (or every room, when the grant names none) |
+| UpdateRoomMetadata, SetRoomVideoCodecs, List/Get/Remove/UpdateParticipant, MuteTrack, SendData | `admin` for the room (or every room, when the grant names none) |
 
 ```sh
 TOK=$(go run ./cmd/moqit token -create -list -admin)
@@ -105,6 +105,16 @@ res, err := rooms.ListParticipants(ctx, connect.NewRequest(&moqitv1.ListParticip
 ```sh
 curl -XPOST localhost:7880/moqit.v1.RoomService/CreateRoom -H "Authorization: Bearer $TOK" \
   -H 'Content-Type: application/json' -d '{"name":"town-hall","dvrWindow":7200}'
+```
+
+- `CreateRoom` takes `video_codecs`, the video codecs participants may publish: `h264`, `h265`, `vp8`, `vp9`, `av1`. Empty allows all. `SetRoomVideoCodecs` changes it live.
+  - `Room.video_codecs` reports it, and clients learn of a change from `room_updated`.
+  - Browser publishers move off codecs no longer allowed. The server refuses any `SetTracks` that announces one.
+  - Unknown names are refused with `invalid_argument`.
+
+```sh
+curl -XPOST localhost:7880/moqit.v1.RoomService/SetRoomVideoCodecs -H "Authorization: Bearer $TOK" \
+  -H 'Content-Type: application/json' -d '{"room":"town-hall","videoCodecs":["h264","vp8"]}'
 ```
 
 ## Webhooks
@@ -135,5 +145,23 @@ p.Close("done")
 
 - **Where it connects:** `Config.URL` is a node's WebTransport URL; the session uses raw QUIC on the same host and port, verified, pinned (`CertHash`) or unverified (`Insecure`). With `RouteURL`, a node's `/v1/route`, it joins the node hosting the room.
 - **Media:** a video Track takes Annex B access units with `WriteVideo(captured, keyframe, au)`, and a keyframe starts a Group. Objects carry the LOC capture timestamp, and audio its level. A track keeps its current Group, and a new subscriber starts from its keyframe, so the publisher needs no keyframes on demand.
+- **Several codecs:** list each rendition's `Encodings`, one MoQ track per codec, named with `client.EncodingTrackName`. The first encoding must be the rendition's own track in the track's codec.
+  - Each subscriber takes the first encoding it can decode. Encode only the tracks whose `Subscribed()` is true.
+  - `SetTracks` changes the tracks live, e.g. to put another codec first. Tracks kept by name keep their subscribers; new names get a Track; dropped ones end.
+
+```go
+r := &moqitv1.Rendition{TrackName: client.EncodingTrackName("camera-720", "av01.0.05M.08"), Width: 1280, Height: 720,
+	Encodings: []*moqitv1.VideoEncoding{
+		{TrackName: client.EncodingTrackName("camera-720", "av01.0.05M.08"), Codec: "av01.0.05M.08"}, // camera-720.av1
+		{TrackName: client.EncodingTrackName("camera-720", "avc1.42e01f"), Codec: "avc1.42e01f"},     // camera-720.avc
+	}}
+// … Join with a TrackInfo whose Codec is "av01.0.05M.08" and Renditions []*moqitv1.Rendition{r}, then per access unit:
+for _, name := range []string{"camera-720.av1", "camera-720.avc"} {
+	if t := p.Track(name); t.Subscribed() {
+		t.WriteVideo(captured, key, encode(name, frame))
+	}
+}
+```
+
 - **Server commands:** `RoomService.MuteTrack` stops the track's renditions and declares it muted.
 - **Logs:** with `Config.Log`, each track subscribed, paused, resumed or unsubscribed is logged with the tracks being sent, and an unsubscribe with the objects and bytes sent.

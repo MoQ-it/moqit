@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +32,9 @@ type Client struct {
 	// Mic receives a writer whenever the relay subscribes to this
 	// participant's "mic" track.
 	Mic chan *moqt.TrackWriter
+	// Video receives a writer whenever the relay subscribes to one of this
+	// participant's camera or screen tracks.
+	Video chan VideoWriter
 	// Vanish cuts the client's network without closing anything, like a
 	// crashed machine or lost connection.
 	Vanish func()
@@ -54,6 +58,12 @@ func (c *Client) HandleSubscribe(r *moqt.SubscribeRequest) {
 	case room.TrackMic:
 		ch = c.Mic
 	default:
+		if strings.HasPrefix(r.Track.Name, "camera-") || strings.HasPrefix(r.Track.Name, "screen-") {
+			if w, err := r.Accept(moqt.AcceptOptions{}); err == nil {
+				c.Video <- VideoWriter{Name: r.Track.Name, W: w}
+			}
+			return
+		}
 		r.Reject(v22.ReqErrDoesNotExist, "")
 		return
 	}
@@ -63,12 +73,19 @@ func (c *Client) HandleSubscribe(r *moqt.SubscribeRequest) {
 	}
 }
 
+// VideoWriter is a subscribed video track of the client.
+type VideoWriter struct {
+	Name string
+	W    *moqt.TrackWriter
+}
+
 // Dial connects to a node with a token, without joining yet.
 func Dial(t testing.TB, addr, identity, token string) (*Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	c := &Client{T: t, Identity: identity, state: map[string]*moqitv1.ParticipantInfo{}, changed: make(chan struct{}, 1),
-		Inbox: make(chan *moqitv1.InboxMessage, 16), signal: make(chan *moqt.TrackWriter, 1), Mic: make(chan *moqt.TrackWriter, 4)}
+		Inbox: make(chan *moqitv1.InboxMessage, 16), signal: make(chan *moqt.TrackWriter, 1), Mic: make(chan *moqt.TrackWriter, 4),
+		Video: make(chan VideoWriter, 8)}
 	// Our own socket, so Vanish can cut it.
 	udp, err := net.ListenUDP("udp", nil)
 	if err != nil {

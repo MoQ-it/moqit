@@ -41,6 +41,10 @@ type result struct {
 	Low     string   `json:"lowSize"`
 	Latency string   `json:"latency"`
 	Rewind  string   `json:"rewind"`
+	Codecs  string   `json:"codecs"`
+	// Codec switches and the decoder fallback, as the page saw them.
+	CodecSwitches string `json:"codecSwitches"`
+	CodecFallback string `json:"codecFallback"`
 }
 
 type launcher func(url, dir string) *exec.Cmd
@@ -212,6 +216,7 @@ func run(t *testing.T, browser launcher, clustered bool) {
 	}
 	t.Logf("video high %s, low %s; %s", res.High, res.Low, res.Latency)
 	t.Logf("rewind: %s", res.Rewind)
+	t.Logf("codecs: %s; switches: %s; decoder fallback: %s", res.Codecs, res.CodecSwitches, res.CodecFallback)
 }
 
 // browse bundles a page from this directory, serves it with mux's

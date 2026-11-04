@@ -2,7 +2,8 @@
 
 import { RequestError, type Session, type Subscription } from "@moq-it/moqt";
 import { eachObject } from "./util.ts";
-import { type TrackInfo, TrackKind, TrackSource } from "./gen/moqit/v1/models_pb.ts";
+import { canDecode, codecOf, parseEncodingTrackName } from "./codecs.ts";
+import { type Rendition, type TrackInfo, TrackKind, TrackSource } from "./gen/moqit/v1/models_pb.ts";
 import { captureClock, Emitter, participantNamespace, qualityIndex, RateMeter, retryDelay, sleep, type VideoQuality } from "./util.ts";
 
 const SAMPLE_RATE = 48000;
@@ -13,7 +14,16 @@ type PublicationEvents = {
   unsubscribed: [RemoteTrack];
   muted: [];
   unmuted: [];
+  /** None of the track's codecs can be decoded here (true), or one can again (false). */
+  unsupported: [boolean];
 };
+
+/** A rendition's encodings; without any, the rendition itself in the track's codec. */
+function encodingsOf(info: TrackInfo, r: Rendition): { trackName: string; codec: string }[] {
+  return r.encodings.length ? r.encodings : [{ trackName: r.trackName, codec: info.codec }];
+}
+
+const familyOf = (codec: string) => codecOf(codec) ?? codec;
 
 /** A track a remote participant publishes; subscribe to get its media. */
 export class RemoteTrackPublication extends Emitter<PublicationEvents> {
@@ -29,7 +39,10 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
   private congestionSteps = 0;
   private resets: number[] = [];
   private relax?: ReturnType<typeof setTimeout>;
-  private current?: string;
+  private current?: string; // MoQ track name subscribed, e.g. "camera-m.av1"
+  private badCodecs = new Set<string>(); // codec families that failed to decode here
+  private unsupported_ = false;
+  private applySeq = 0;
 
   constructor(
     info: TrackInfo,
@@ -61,7 +74,17 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
 
   /** The rendition (simulcast layer) received, e.g. "camera-m". */
   get currentRendition(): string | undefined {
+    return this.track && this.current ? parseEncodingTrackName(this.current).rendition : undefined;
+  }
+
+  /** The MoQ track received, e.g. "camera-m.av1": the rendition in one codec. */
+  get currentTrackName(): string | undefined {
     return this.track ? this.current : undefined;
+  }
+
+  /** None of the codecs this video is sent in can be decoded here. */
+  get unsupported(): boolean {
+    return this.unsupported_;
   }
 
   /** The quality set with setVideoQuality; undefined is automatic. */
@@ -72,9 +95,11 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
   /** @internal */
   update(info: TrackInfo) {
     const wasMuted = this.info.muted;
-    const layers = (i: TrackInfo) => i.renditions.map((r) => `${r.trackName}:${r.width}`).join();
+    const layers = (i: TrackInfo) =>
+      i.renditions.map((r) => `${r.trackName}:${r.width}:${encodingsOf(i, r).map((e) => `${e.trackName}=${e.codec}`).join("|")}`).join();
     const changed = layers(info) !== layers(this.info);
     this.info = info;
+    if (this.track instanceof RemoteVideoTrack) this.track.info = info;
     if (wasMuted !== info.muted) this.emit(info.muted ? "muted" : "unmuted");
     if (changed) {
       // The publisher changed its resolution: choose again among what it sends.
@@ -87,9 +112,10 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
   async setSubscribed(subscribed: boolean): Promise<void> {
     this.wantSubscribed = subscribed;
     if (subscribed && !this.track) {
-      const track = this.info.kind === TrackKind.AUDIO
-        ? new RemoteAudioTrack(this.info, this.ctx.audio)
-        : new RemoteVideoTrack(this.info);
+      const video = this.info.kind !== TrackKind.AUDIO;
+      const choice = video ? await this.choose() : undefined;
+      if (this.track || !this.wantSubscribed) return; // subscribed (or not wanted) meanwhile
+      const track = video ? new RemoteVideoTrack(this.info, choice?.codec) : new RemoteAudioTrack(this.info, this.ctx.audio);
       this.track = track;
       if (track instanceof RemoteAudioTrack) track.setVolume(this.ctx.volume(this.info.source));
       if (track instanceof RemoteVideoTrack) {
@@ -97,10 +123,15 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
         track.audioClock = () => this.ctx.audioClock(source);
         if (this.ctx.adaptive) track.onRendered = (width, visible) => this.rendered(width, visible);
         track.onReset = () => this.congested();
+        track.onUndecodable = (c) => this.undecodable(c);
+        this.setUnsupported(!choice);
+        this.current = choice?.trackName ?? "";
+      } else {
+        this.current = this.rendition()?.trackName ?? "";
       }
-      this.current = this.rendition();
+      const codec = choice?.codec;
       try {
-        await track.start(this.ctx.session, participantNamespace(this.ctx.room, this.ctx.identity), this.current);
+        await track.start(this.ctx.session, participantNamespace(this.ctx.room, this.ctx.identity), this.current, codec);
       } catch (e) {
         this.track = undefined;
         throw e;
@@ -142,21 +173,60 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
   }
 
   /** The rendition the current constraints select. */
-  private rendition(): string {
+  private rendition(): Rendition | undefined {
     const r = this.info.renditions;
-    if (r.length === 0) return "";
+    if (r.length === 0) return undefined;
     let idx: number;
     if (this.manual) idx = qualityIndex(this.manual, r.length);
     else idx = this.bySize ?? qualityIndex(this.defaultQuality, r.length);
     idx = Math.min(r.length - 1, idx + this.congestionSteps);
-    return r[idx].trackName;
+    return r[idx];
+  }
+
+  /**
+   * The rendition's first encoding this browser decodes. The publisher
+   * lists its preferred codec first, so taking that when possible spares
+   * it encoding another.
+   */
+  private async choose(): Promise<{ trackName: string; codec: string } | undefined> {
+    const r = this.rendition();
+    if (!r) return undefined;
+    for (const e of encodingsOf(this.info, r)) {
+      if (this.badCodecs.has(familyOf(e.codec))) continue;
+      if (await canDecode(e.codec)) return e;
+    }
+    return undefined;
   }
 
   private async apply() {
-    const next = this.rendition();
-    if (next === this.current || !(this.track instanceof RemoteVideoTrack)) return;
-    this.current = next;
-    await this.track.switchTo(next);
+    const seq = ++this.applySeq;
+    if (!(this.track instanceof RemoteVideoTrack)) return;
+    const next = await this.choose();
+    const track = this.track;
+    if (seq !== this.applySeq || !(track instanceof RemoteVideoTrack)) return;
+    this.setUnsupported(!next);
+    if (!next) return;
+    if (next.trackName === this.current) {
+      if (next.codec !== track.codec) track.setCodec(next.codec); // e.g. a level raised for a larger size
+      return;
+    }
+    this.current = next.trackName;
+    await track.switchTo(next.trackName, next.codec);
+  }
+
+  // The decoder fails on every keyframe in this codec: try another one.
+  private undecodable(codec: string) {
+    console.warn(`moqit: can't decode ${codec}; trying another codec`);
+    this.badCodecs.add(familyOf(codec));
+    if (this.track instanceof RemoteVideoTrack && this.track.rewound) return this.setUnsupported(true);
+    void this.apply();
+  }
+
+  private setUnsupported(unsupported: boolean) {
+    if (this.track instanceof RemoteVideoTrack) this.track.unsupported = unsupported;
+    if (unsupported === this.unsupported_) return;
+    this.unsupported_ = unsupported;
+    this.emit("unsupported", unsupported);
   }
 
   // Renditions are ordered largest first; pick the smallest that is at
@@ -248,7 +318,9 @@ export class RemoteVideoTrack {
   private paused = false;
   private inFlight?: { cancel(): void };
   private observers: { disconnect(): void }[] = [];
-  private codec: string;
+  private codec_: string; // the decoder's codec
+  private liveCodec: string; // the codec of the live track subscribed
+  private recodec = false; // the live track's codec string changed: reconfigure at the next Group
   private decodeErrors: number[] = [];
   private software = false;
   private waitKey = false;
@@ -266,10 +338,31 @@ export class RemoteVideoTrack {
   onRendered?: (width: number, visible: boolean) => void;
   /** @internal Called when the relay resets a group (delivery timeout). */
   onReset?: () => void;
+  /** @internal Called when decoding a codec fails every time. */
+  onUndecodable?: (codec: string) => void;
+  /** None of the publisher's codecs can be decoded here. */
+  unsupported = false;
 
-  constructor(readonly info: TrackInfo) {
-    this.codec = info.codec;
+  /** @param codec the codec received first (default: the publisher's preferred one) */
+  constructor(public info: TrackInfo, codec = info.codec) {
+    this.codec_ = this.liveCodec = codec;
     this.decoder = this.newDecoder();
+  }
+
+  /** The WebCodecs codec string being decoded, e.g. "av01.0.05M.08". */
+  get codec(): string {
+    return this.codec_;
+  }
+
+  /** Decoding fell back to software after the hardware decoder failed. */
+  get softwareDecoding(): boolean {
+    return this.software;
+  }
+
+  /** @internal The live track's codec string changed (same codec family); applied from the next Group. */
+  setCodec(codec: string) {
+    this.liveCodec = codec;
+    this.recodec = true;
   }
 
   /** Playing rewound history (Room.seek) rather than the live track. */
@@ -278,8 +371,8 @@ export class RemoteVideoTrack {
   }
   private archive = false;
 
-  private newDecoder(codec = this.info.codec): VideoDecoder {
-    this.codec = codec;
+  private newDecoder(codec = this.liveCodec): VideoDecoder {
+    this.codec_ = codec;
     const d: VideoDecoder = new VideoDecoder({
       output: (frame) => {
         this.framesDecoded++;
@@ -292,7 +385,15 @@ export class RemoteVideoTrack {
         if (d === this.decoder && !this.stopped) this.recover();
       },
     });
-    d.configure({ codec, optimizeForLatency: true, ...(this.software ? { hardwareAcceleration: "prefer-software" as const } : {}) });
+    try {
+      d.configure({ codec, optimizeForLatency: true, ...(this.software ? { hardwareAcceleration: "prefer-software" as const } : {}) });
+    } catch (e) {
+      // An invalid codec string: no decoder will take it.
+      console.warn("moqit: video decoder configure failed", codec, e);
+      queueMicrotask(() => {
+        if (d === this.decoder && !this.stopped) this.onUndecodable?.(codec);
+      });
+    }
     return d;
   }
 
@@ -302,12 +403,16 @@ export class RemoteVideoTrack {
   private recover() {
     const now = performance.now();
     this.decodeErrors = [...this.decodeErrors.filter((t) => now - t < 30000), now];
-    if (this.decodeErrors.length > 5) return; // failing every time, e.g. an unsupported codec
+    if (this.decodeErrors.length > 5) {
+      // Failing every time, e.g. a codec this device can't decode after all.
+      if (this.decodeErrors.length === 6) this.onUndecodable?.(this.codec_);
+      return;
+    }
     if (this.decodeErrors.length >= 2 && !this.software) {
       this.software = true;
       console.warn("moqit: video decoding switched to software after repeated errors");
     }
-    this.decoder = this.newDecoder(this.codec);
+    this.decoder = this.newDecoder(this.codec_);
     this.waitKey = true;
     if (!this.archive && !this.paused) void this.sub?.update({ forward: 1, newGroupRequest: 0 }).catch(() => {});
   }
@@ -337,7 +442,7 @@ export class RemoteVideoTrack {
 
   /** @internal An archived recording starts, possibly with another codec. */
   archiveEpoch(codec?: string) {
-    if (this.archive) this.resetDecoder(codec || this.info.codec);
+    if (this.archive) this.resetDecoder(codec || this.liveCodec);
   }
 
   /** @internal One archived object; ts is its capture time (µs). */
@@ -384,14 +489,21 @@ export class RemoteVideoTrack {
   }
 
   /** @internal */
-  async start(session: Session, ns: string[], trackName: string) {
+  /** @internal Starts receiving trackName in codec; with no track name, only once switchTo names one. */
+  async start(session: Session, ns: string[], trackName: string, codec?: string) {
     this.session = session;
     this.ns = ns;
-    await this.switchTo(trackName);
+    if (trackName) await this.switchTo(trackName, codec);
   }
 
-  /** @internal Subscribes to another rendition; the old one is dropped once the new one delivers. */
-  async switchTo(trackName: string) {
+  /** @internal Subscribes to another rendition or codec; the old one is dropped once the new one delivers. */
+  async switchTo(trackName: string, codec = this.liveCodec) {
+    if (codec !== this.liveCodec) {
+      this.decodeErrors = [];
+      this.software = false;
+    }
+    this.liveCodec = codec;
+    this.recodec = false;
     if (this.archive) {
       this.trackName = trackName; // taken up again on leaving the archive
       return;
@@ -444,6 +556,10 @@ export class RemoteVideoTrack {
           // already closed
         }
         this.decoder = this.newDecoder();
+      } else if (this.recodec) {
+        this.recodec = false;
+        this.resetDecoder();
+        this.waitKey = false;
       }
       let key = true; // each Group starts with a keyframe
       this.inFlight = group;
