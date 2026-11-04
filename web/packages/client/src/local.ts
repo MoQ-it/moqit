@@ -4,16 +4,30 @@ import type { OutgoingSubgroup, SubscribeRequest, TrackWriter } from "@moq-it/mo
 import { type Rendition, RenditionSchema, TrackKind, TrackSource } from "./gen/moqit/v1/models_pb.ts";
 import { create } from "@bufbuild/protobuf";
 import { type Allocation, HALF_FLOOR, type Layer, SendQueue } from "./sendcontrol.ts";
-import { captureClock, codecForRenditions, LocProperty, RateMeter, type RenditionSpec, Serial, TrackName, videoEncoderConfig } from "./util.ts";
+import { codecForRenditions, codecOf, codecString, encodingTrackName, parseEncodingTrackName, type VideoCodec, videoEncoderConfig } from "./codecs.ts";
+import { captureClock, LocProperty, RateMeter, type RenditionSpec, Serial, TrackName } from "./util.ts";
 
 const GOP_SECONDS = 2;
 const DRAIN_MS = 4000; // a dropped rendition keeps sending this long, while subscribers switch
+// A codec failing this often, or dropping this share of frames because the
+// encoder is behind, is given up on this device.
+const MAX_FAILURES = 3;
+const FAILURE_WINDOW_MS = 30000;
+const BACKLOG_WINDOW_MS = 5000;
+const BACKLOG_SHARE = 0.3;
 
 export type LocalTrack = LocalVideoTrack | LocalAudioTrack;
 
 /** A rendition being sent: its encoded size and bitrate, and how its sending keeps up. */
 export interface SendingRendition {
+  /** The rendition, e.g. "camera-h". */
   rendition: string;
+  /** The MoQ track, e.g. "camera-h.av1". */
+  trackName: string;
+  /** The WebCodecs codec string encoded. */
+  codec: string;
+  /** The device reports a hardware encoder for the codec. */
+  hardware: boolean;
   width: number;
   height: number;
   /** Bits per second handed to the transport. */
@@ -189,7 +203,10 @@ function startFrameSource(track: MediaStreamTrack, onFrame: (f: VideoFrame) => v
   return { stop: () => ((stopped = true), (video.srcObject = null)) };
 }
 
-/** Camera or screen video, published as one MoQ track per rendition. */
+/**
+ * Camera or screen video, published as one MoQ track per rendition and
+ * codec ("camera-h.av1"). Only tracks someone subscribes to are encoded.
+ */
 export class LocalVideoTrack extends LocalTrackBase {
   readonly kind = TrackKind.VIDEO;
   private encoders = new Map<string, RenditionEncoder>();
@@ -197,20 +214,53 @@ export class LocalVideoTrack extends LocalTrackBase {
   private nextGroup = 0;
   private previewEl?: HTMLVideoElement;
   private specs_: RenditionSpec[];
+  private codecs_: VideoCodec[];
   private draining = new Map<string, ReturnType<typeof setTimeout>>();
   private suspended_ = new Set<string>();
-  /** Published codec string; for H.264, with a level that fits every rendition. */
-  codec: string;
+  // A codec string given to the constructor, kept (with its level fitted) for its codec.
+  private given?: { codec: VideoCodec; base: string };
+  /** @internal Called when a codec fails or can't keep up on this device. */
+  onCodecFailure?: (codec: VideoCodec, reason: string) => void;
+  /** @internal Codecs the device reports hardware encoders for. */
+  hardware = new Set<VideoCodec>();
 
+  /**
+   * @param codecs the codecs to offer, preferred first, or one WebCodecs
+   * codec string (e.g. "avc1.42e01f").
+   */
   constructor(
     track: MediaStreamTrack,
     readonly source: TrackSource,
-    private baseCodec: string,
+    codecs: string | readonly VideoCodec[],
     specs: RenditionSpec[],
   ) {
     super(track);
     this.specs_ = specs;
-    this.codec = codecForRenditions(baseCodec, specs);
+    if (typeof codecs === "string") {
+      const codec = codecOf(codecs);
+      if (!codec) throw new Error(`unknown video codec ${codecs}`);
+      this.given = { codec, base: codecs };
+      this.codecs_ = [codec];
+    } else {
+      if (codecs.length === 0) throw new Error("no video codec");
+      this.codecs_ = [...codecs];
+    }
+  }
+
+  /** Published codec string of the preferred codec, with a level that fits every rendition. */
+  get codec(): string {
+    return this.codecString(this.codecs_[0]);
+  }
+
+  /** The codecs offered, preferred first. */
+  get codecs(): readonly VideoCodec[] {
+    return this.codecs_;
+  }
+
+  /** @internal The codec string of a codec at a level fitting every rendition. */
+  codecString(codec: VideoCodec): string {
+    if (this.given?.codec === codec) return codecForRenditions(this.given.base, this.specs_);
+    return codecString(codec, this.specs_);
   }
 
   /** The renditions sent, largest first. */
@@ -226,12 +276,27 @@ export class LocalVideoTrack extends LocalTrackBase {
    */
   setRenditions(specs: RenditionSpec[]) {
     this.specs_ = specs;
-    this.codec = codecForRenditions(this.baseCodec, specs);
+    this.reconcile();
+  }
+
+  /**
+   * Changes the codecs offered, preferred first. Encodings in a codec no
+   * longer offered keep going for a few seconds, so subscribers can move
+   * to another first. The caller announces the change.
+   */
+  setCodecs(codecs: readonly VideoCodec[]) {
+    if (codecs.length === 0) throw new Error("no video codec");
+    this.codecs_ = [...codecs];
+    this.reconcile();
+  }
+
+  // Re-specs the encoders still offered and drains the others.
+  private reconcile() {
     for (const [name, enc] of this.encoders) {
-      const spec = specs.find((s) => s.trackName === name);
+      const spec = this.specs_.find((s) => s.trackName === enc.rendition);
       clearTimeout(this.draining.get(name));
       this.draining.delete(name);
-      if (spec) {
+      if (spec && this.codecs_.includes(enc.codec)) {
         enc.setSpec(spec);
         continue;
       }
@@ -250,12 +315,19 @@ export class LocalVideoTrack extends LocalTrackBase {
   }
 
   trackNames(): string[] {
-    return this.specs.map((s) => s.trackName);
+    return this.specs.flatMap((s) => this.codecs_.map((c) => encodingTrackName(s.trackName, c)));
   }
 
   /** The renditions announced: all but those suspended for a limited uplink. */
   renditions(): Rendition[] {
-    return this.specs.filter((s) => !this.suspended_.has(s.trackName)).map((s) => create(RenditionSchema, s));
+    const [primary] = this.codecs_;
+    return this.specs
+      .filter((s) => !this.suspended_.has(s.trackName))
+      .map((s) => create(RenditionSchema, {
+        ...s,
+        trackName: encodingTrackName(s.trackName, primary),
+        encodings: this.codecs_.map((c) => ({ trackName: encodingTrackName(s.trackName, c), codec: this.codecString(c) })),
+      }));
   }
 
   /** Renditions not sent because the uplink can't carry them. */
@@ -266,27 +338,36 @@ export class LocalVideoTrack extends LocalTrackBase {
   /** @internal The renditions as layers for send control, and which are being encoded. */
   layers(): { layer: Layer; encoding: boolean }[] {
     const n = this.specs_.length;
-    return this.specs_.map((s, i) => ({
-      layer: { rendition: s.trackName, rank: n - 1 - i, screen: this.source === TrackSource.SCREEN, spec: s.bitrate },
-      encoding: this.encoders.has(s.trackName),
-    }));
+    return this.specs_.map((s, i) => {
+      // Each codec a rendition is encoded in takes its share of the uplink.
+      const encoders = Math.max(1, this.encodersOf(s.trackName).length);
+      return {
+        layer: { rendition: s.trackName, rank: n - 1 - i, screen: this.source === TrackSource.SCREEN, spec: s.bitrate * encoders },
+        encoding: this.encodersOf(s.trackName).length > 0,
+      };
+    });
+  }
+
+  private encodersOf(rendition: string): RenditionEncoder[] {
+    return [...this.encoders.values()].filter((e) => e.rendition === rendition);
   }
 
   /** @internal Applies the send controller's shares to the encoders. */
   applyAllocation(alloc: Map<string, Allocation>) {
-    for (const [name, enc] of this.encoders) {
-      const a = alloc.get(name);
+    for (const enc of this.encoders.values()) {
+      const a = alloc.get(enc.rendition);
       if (!a) continue;
+      const share = 1 / Math.max(1, this.encodersOf(enc.rendition).length);
       // A layer about to be suspended runs at the least until it is.
       if (a.suspend) enc.setRate(0.5 * HALF_FLOOR * enc.specBitrate, true);
-      else enc.setRate(a.bitrate, a.halfRate);
+      else enc.setRate(a.bitrate * share, a.halfRate);
     }
   }
 
   /** @internal Stops (or resumes) encoding renditions the uplink can't carry; the caller re-announces the tracks. */
   setSuspended(names: Set<string>) {
     this.suspended_ = new Set([...names].filter((n) => this.specs_.some((s) => s.trackName === n)));
-    for (const [name, enc] of this.encoders) enc.setSuspended(this.suspended_.has(name));
+    for (const enc of this.encoders.values()) enc.setSuspended(this.suspended_.has(enc.rendition));
   }
 
   /** A local preview element. */
@@ -320,7 +401,7 @@ export class LocalVideoTrack extends LocalTrackBase {
     };
     return [...this.encoders.values()]
       .map((e) => ({
-        rendition: e.name, ...(e.encodedSize ?? { width: 0, height: 0 }), bitrate: e.bitrate,
+        rendition: e.rendition, trackName: e.name, codec: this.codecString(e.codec), hardware: this.hardware.has(e.codec), ...(e.encodedSize ?? { width: 0, height: 0 }), bitrate: e.bitrate,
         sendDelayMs: e.sendDelayMs, droppedFrames: e.droppedFrames, targetBitrate: e.targetBitrate, framerate: e.framerate, limited: e.limited,
       }))
       .sort((a, b) => order(a.rendition) - order(b.rendition));
@@ -332,19 +413,28 @@ export class LocalVideoTrack extends LocalTrackBase {
   }
 
   async serve(req: SubscribeRequest): Promise<void> {
-    const spec = this.specs.find((s) => s.trackName === req.track.name);
-    if (!spec) return req.reject(0x10, "no such rendition");
+    const name = req.track.name;
+    const { rendition, codec } = parseEncodingTrackName(name);
+    const spec = this.specs.find((s) => s.trackName === rendition);
+    if (!spec || !codec || !this.codecs_.includes(codec)) return req.reject(0x10, "no such rendition");
     const writer = await req.accept({ properties: [{ type: 0x30, int: 1 }] }); // DYNAMIC_GROUPS: honours NEW_GROUP_REQUEST
-    const enc = new RenditionEncoder(this, spec, writer);
+    const enc = new RenditionEncoder(this, spec, codec, name, writer);
     enc.setSuspended(this.suspended_.has(spec.trackName));
-    this.encoders.get(spec.trackName)?.close();
-    this.encoders.set(spec.trackName, enc);
+    clearTimeout(this.draining.get(name));
+    this.draining.delete(name);
+    this.encoders.get(name)?.close();
+    this.encoders.set(name, enc);
     writer.signal.addEventListener("abort", () => {
-      if (this.encoders.get(spec.trackName) === enc) this.encoders.delete(spec.trackName);
+      if (this.encoders.get(name) === enc) this.encoders.delete(name);
       enc.close();
       if (this.encoders.size === 0) this.stopCapture();
     });
     this.source_ ??= startFrameSource(this.mediaStreamTrack, (f) => this.onFrame(f));
+  }
+
+  /** @internal An encoder found its codec unusable here. */
+  codecFailed(codec: VideoCodec, reason: string) {
+    this.onCodecFailure?.(codec, reason);
   }
 
   private onFrame(frame: VideoFrame) {
@@ -389,9 +479,19 @@ class RenditionEncoder {
   private queue = new SendQueue<EncodedFrame>((f) => this.write(f), () => this.abandonGroup());
   private closed = false;
   private failedAt = 0;
+  private failures: number[] = [];
+  private backlog = { since: 0, frames: 0, dropped: 0 };
   private meter = new RateMeter();
 
-  constructor(private track: LocalVideoTrack, private spec: RenditionSpec, private writer: TrackWriter) {
+  constructor(
+    private track: LocalVideoTrack,
+    private spec: RenditionSpec,
+    /** The codec family encoded. */
+    readonly codec: VideoCodec,
+    /** The MoQ track name, e.g. "camera-h.av1". */
+    readonly name: string,
+    private writer: TrackWriter,
+  ) {
     this.encoder = this.newEncoder();
     writer.onUpdate = (p) => {
       if (p.newGroupRequest !== undefined) this.forceKey = true;
@@ -403,8 +503,8 @@ class RenditionEncoder {
       output: (chunk) => this.output(chunk),
       error: (e) => {
         // A failed encoder closes itself; encode() makes a new one.
-        console.error(`moqit: ${this.spec.trackName} encoder error (${this.track.codec} ${this.configured?.width}x${this.configured?.height})`, e);
-        this.failedAt = performance.now();
+        console.error(`moqit: ${this.name} encoder error (${this.configured?.width}x${this.configured?.height})`, e);
+        this.failed(`encoder error: ${e.message}`);
       },
     });
   }
@@ -413,8 +513,32 @@ class RenditionEncoder {
     this.forceKey = true;
   }
 
-  get name(): string {
+  /** The rendition encoded, e.g. "camera-h". */
+  get rendition(): string {
     return this.spec.trackName;
+  }
+
+  // Repeated failures mean the codec doesn't work here: let the track move off it.
+  private failed(reason: string) {
+    const now = performance.now();
+    this.failedAt = now;
+    this.failures = [...this.failures.filter((t) => now - t < FAILURE_WINDOW_MS), now];
+    if (this.failures.length >= MAX_FAILURES) {
+      this.failures = [];
+      this.track.codecFailed(this.codec, reason);
+    }
+  }
+
+  // An encoder that can't keep up drops frames: sustained, that is a failure too.
+  private countBacklog(dropped: boolean) {
+    const now = performance.now();
+    if (now - this.backlog.since > BACKLOG_WINDOW_MS) {
+      const { frames, dropped: d } = this.backlog;
+      this.backlog = { since: now, frames: 0, dropped: 0 };
+      if (frames >= 30 && d > BACKLOG_SHARE * frames) this.track.codecFailed(this.codec, `encoder too slow: dropped ${d} of ${frames} frames`);
+    }
+    this.backlog.frames++;
+    if (dropped) this.backlog.dropped++;
   }
 
   /** The size being encoded. */
@@ -489,7 +613,9 @@ class RenditionEncoder {
       this.encoder = this.newEncoder();
       this.configured = undefined;
     }
-    if (this.encoder.encodeQueueSize > 2) return; // encoder behind: drop rather than add latency
+    const behind = this.encoder.encodeQueueSize > 2; // encoder behind: drop rather than add latency
+    this.countBacklog(behind);
+    if (behind) return;
     const { width, height } = this.size(frame);
     const resized = !this.configured || this.configured.width !== width || this.configured.height !== height;
     if (resized || this.reconfigure) {
@@ -498,10 +624,11 @@ class RenditionEncoder {
       if (resized) this.forceKey = true;
       this.reconfigure = false;
       try {
-        this.encoder.configure(videoEncoderConfig(this.track.codec, width, height, this.targetBitrate, this.spec.framerate));
+        this.encoder.configure(videoEncoderConfig(this.track.codecString(this.codec), width, height, this.targetBitrate, this.spec.framerate));
       } catch (e) {
-        console.error(`moqit: ${this.spec.trackName} encoder configure failed (${this.track.codec} ${width}x${height})`, e);
-        this.failedAt = performance.now();
+        console.error(`moqit: ${this.name} encoder configure failed (${width}x${height})`, e);
+        this.configured = undefined;
+        this.failed(`configure failed: ${(e as Error).message}`);
         return;
       }
     }

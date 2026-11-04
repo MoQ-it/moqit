@@ -147,7 +147,8 @@ func (p *Participant) handleSignal(cs *moqitv1.ClientSignal) {
 // setTracks validates and records the participant's published tracks.
 func (p *Participant) setTracks(tracks []*moqitv1.TrackInfo) error {
 	perm := p.permission()
-	seen := map[string]bool{}
+	allowed := p.room.roomInfo().VideoCodecs
+	seen, moqNames := map[string]bool{}, map[string]bool{}
 	for _, t := range tracks {
 		if t.Name == "" || seen[t.Name] {
 			return fmt.Errorf("track names must be unique and non-empty")
@@ -162,11 +163,8 @@ func (p *Participant) setTracks(tracks []*moqitv1.TrackInfo) error {
 		if t.Channels > 2 {
 			return fmt.Errorf("track %q has %d channels; at most 2 are supported", t.Name, t.Channels)
 		}
-		for _, rd := range t.Renditions {
-			class, src := classifyTrack(rd.TrackName)
-			if class != classMedia || src != t.Source {
-				return fmt.Errorf("rendition track %q does not match source %v", rd.TrackName, t.Source)
-			}
+		if err := checkEncodings(t, allowed, moqNames); err != nil {
+			return fmt.Errorf("track %q: %w", t.Name, err)
 		}
 	}
 	var published, unpublished []*moqitv1.TrackInfo

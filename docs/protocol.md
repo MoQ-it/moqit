@@ -4,7 +4,7 @@ moqit speaks [MoQ Transport draft-22](https://datatracker.ietf.org/doc/draft-iet
 
 | Namespace / track | Direction | Content |
 |---|---|---|
-| `moqit/<room>/p/<identity>` / `mic`, `camera-h\|m\|l`, `screen-h\|l`, `screen-audio` | participant → anyone | media, one track per rendition |
+| `moqit/<room>/p/<identity>` / `mic`, `camera-h\|m\|l.<codec>`, `screen-h\|l.<codec>`, `screen-audio` | participant → anyone | media, one track per rendition and video codec |
 | `moqit/<room>/p/<identity>` / `data`, `data-lossy`, `catalog` | participant → anyone | broadcast data, MSF catalog |
 | `moqit/<room>/p/<identity>` / `signal` | participant → server only | `ClientSignal`: metadata, track list, targeted data |
 | `moqit/<room>/p/<identity>` / `dvr` | server → viewers, FETCH only | `DvrIndex`: the participant's recorded history, one Group per minute (see [Rewind](#rewind)) |
@@ -14,6 +14,19 @@ moqit speaks [MoQ Transport draft-22](https://datatracker.ietf.org/doc/draft-iet
 Messages are defined in `proto/moqit/v1`.
 
 A participant declares its tracks in `SetTracks`. Each `TrackInfo` lists its renditions, largest first, and their MoQ track names. A camera may have any number of renditions named `camera-<anything>`: browsers use `camera-h|m|l`, the [RTMP ingress](https://github.com/MoQ-it/moqit-ingress) `camera-<height>`. For audio, `TrackInfo.channels` is 2 for stereo; 0 or 1 is mono.
+
+## Video codecs
+
+A video rendition can be offered in several codecs, each a MoQ track of its own. `Rendition.encodings` lists them in the publisher's order of preference.
+
+- **Naming:** a codec track's name is the rendition's plus a codec suffix: `.avc` (H.264), `.hevc` (H.265), `.vp8`, `.vp9`, `.av1`. Examples: `camera-h.av1`, `screen-l.vp8`.
+- **A name's codec family never changes.** A live codec switch is a move to another track, never a different bitstream on the same one. So no codec marker is needed inside the media, and a recording never mixes codecs.
+- **The first encoding is the primary.** It must equal `Rendition.track_name` in `TrackInfo.codec`, so clients that ignore `encodings` still find a track they can describe. An empty `encodings` means just that one track, which is what the Go SDK and the ingress send.
+- **Codec strings** are WebCodecs strings carrying a level that fits the largest rendition. H.264 and H.265 (`hev1`) keep their parameter sets in-band, so decoders need no description.
+- **Subscribers** take the first encoding they can decode. Publishers encode a track only while it has subscribers.
+- **Switching:** to change codec, a publisher re-sends `SetTracks` with the new order. It keeps encoding a dropped codec for a few seconds, so subscribers can move first.
+
+A room's `video_codecs` (`h264`, `h265`, `vp8`, `vp9`, `av1`; empty allows all) is set by `CreateRoom` or `SetRoomVideoCodecs`. The server refuses a `SetTracks` announcing any other video codec, and publishers move off codecs the room stops allowing when `room_updated` tells them.
 
 ## Joining
 
@@ -48,7 +61,7 @@ A room created with a `dvr_window` keeps that many seconds of history, and viewe
 
 **The index.** Each participant namespace has a fetch-only `dvr` track. Group *m* holds one Object, a `DvrIndex` for unix minute *m*:
 - `checkpoints`: Group starts, at most one per second per track. Each has the archive Group ID, the server time `at` and the capture time `loc` (from the LOC timestamp), both in µs.
-- `epochs`: the codec, size and channels of the epochs those checkpoints belong to.
+- `epochs`: the codec, size and channels of the epochs those checkpoints belong to. A new epoch starts whenever the recorded rendition's track or codec family changes, e.g. after a codec switch.
 - `earliest`, `latest`: the server times of the oldest and newest stored media of the participant.
 
 Subscribing to `dvr` is refused.

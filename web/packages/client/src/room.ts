@@ -20,6 +20,7 @@ import {
   RoomStateUpdateSchema,
 } from "./gen/moqit/v1/signal_pb.ts";
 import { Rewind, type Timeline } from "./dvr.ts";
+import { type CodecSupport, probeVideoCodecs, rankCodecs, type VideoCodec, type VideoCodecPreference } from "./codecs.ts";
 import { LocalAudioTrack, type LocalTrack, LocalVideoTrack, type TrackProcessor } from "./local.ts";
 import { allocate, type Feedback, SendController, Suspensions } from "./sendcontrol.ts";
 import { AudioOutput, type RemoteAudioTrack, RemoteTrackPublication, type RemoteTrack } from "./remote.ts";
@@ -30,13 +31,13 @@ import {
   inboxNamespace,
   jwtClaims,
   participantNamespace,
-  pickVideoCodec,
   retryDelay,
   ScreenRenditions,
   Serial,
   serverNamespace,
   sleep,
   TrackName,
+  type RenditionSpec,
   type VideoQuality,
   type VideoResolution,
 } from "./util.ts";
@@ -81,6 +82,12 @@ export type RoomEvents = {
   sendLimitedChanged: [boolean];
   /** How loud a participant's audio plays here changed (RemoteParticipant.setVolume). */
   participantVolumeChanged: [RemoteParticipant, TrackSource, number];
+  /** A video codec failed or couldn't keep up on this device; video moved to the codecs that remain. */
+  videoCodecFallback: [VideoCodec, string];
+  /** None of a remote video's codecs can be decoded here, or they can again. */
+  trackUnsupported: [RemoteTrackPublication, RemoteParticipant, boolean];
+  /** The video codecs the room allows changed (RoomService.SetRoomVideoCodecs). */
+  roomVideoCodecsChanged: [string[]];
 };
 
 export interface RoomOptions {
@@ -106,6 +113,12 @@ export interface RoomOptions {
    * carry them, using the server's reports on how media arrives.
    */
   adaptiveSend?: boolean;
+  /**
+   * The video codec to send (default "auto": the most efficient one this
+   * device encodes well, preferring hardware encoders). Alternatives are
+   * offered too, so subscribers that can't decode it get another.
+   */
+  videoCodec?: VideoCodecPreference;
 }
 
 export interface ConnectOptions {
@@ -174,7 +187,7 @@ export class Room extends Emitter<RoomEvents> {
 
   constructor(options: RoomOptions = {}) {
     super();
-    this.options = { autoSubscribe: true, videoQuality: "medium", adaptiveStream: true, disconnectOnPageLeave: true, adaptiveSend: true, ...options };
+    this.options = { autoSubscribe: true, videoQuality: "medium", adaptiveStream: true, disconnectOnPageLeave: true, adaptiveSend: true, videoCodec: "auto", ...options };
   }
 
   /** Read-only viewers of the room, on every node; updated every few seconds. */
@@ -518,6 +531,20 @@ export class Room extends Emitter<RoomEvents> {
     this.info = info;
     if (old?.metadata !== undefined && old.metadata !== info?.metadata) this.emit("roomMetadataChanged", info?.metadata ?? "");
     if ((old?.numViewers ?? 0) !== (info?.numViewers ?? 0)) this.emit("viewerCountChanged", info?.numViewers ?? 0);
+    if (old && info && old.videoCodecs.join() !== info.videoCodecs.join()) {
+      this.emit("roomVideoCodecsChanged", info.videoCodecs);
+      if (!this.isViewer) void this.localParticipant.codecPolicyChanged().catch((e) => console.warn("moqit: video codec policy", e));
+    }
+  }
+
+  /** The video codecs the room allows; empty allows all. */
+  get videoCodecs(): string[] {
+    return this.info?.videoCodecs ?? [];
+  }
+
+  /** @internal */
+  emitCodecFallback(codec: VideoCodec, reason: string) {
+    this.emit("videoCodecFallback", codec, reason);
   }
 
   private async readRoom(sub: Subscription) {
@@ -611,6 +638,10 @@ export class Room extends Emitter<RoomEvents> {
     this.emit(sub ? "trackSubscribed" : "trackUnsubscribed", t, pub, p);
   }
   /** @internal */
+  emitTrackUnsupported(pub: RemoteTrackPublication, p: RemoteParticipant, unsupported: boolean) {
+    this.emit("trackUnsupported", pub, p, unsupported);
+  }
+  /** @internal */
   emitData(payload: Uint8Array, p: RemoteParticipant, topic: string) {
     this.emit("dataReceived", payload, p, topic);
   }
@@ -673,6 +704,7 @@ export class RemoteParticipant extends Participant {
       pub.on("unmuted", () => this.room.emitTrack("trackUnmuted", p, this));
       pub.on("subscribed", (tr) => this.room.emitSubscribed(true, tr, p, this));
       pub.on("unsubscribed", (tr) => this.room.emitSubscribed(false, tr, p, this));
+      pub.on("unsupported", (unsupported) => this.room.emitTrackUnsupported(p, this, unsupported));
       this.trackPublications.set(t.sid, pub);
       if (t.kind === TrackKind.VIDEO && this.room.videoQuality) void pub.setVideoQuality(this.room.videoQuality);
       this.room.emitTrack("trackPublished", pub, this);
@@ -758,7 +790,9 @@ const MIC_CONSTRAINTS: MediaTrackConstraints = { echoCancellation: true, noiseSu
 export class LocalParticipant extends Participant {
   /** Published tracks by name ("camera", "microphone", "screen", "screen-audio"). */
   readonly tracks = new Map<string, LocalTrack>();
-  private videoCodec?: Promise<string>;
+  private codecPref: VideoCodecPreference;
+  private brokenCodecs = new Set<VideoCodec>();
+  private codecSerial = new Serial();
   private cameraRes: VideoResolution = "720p";
   private processors = new Map<TrackSource, TrackProcessor | undefined>();
   private send = new SendController();
@@ -770,6 +804,7 @@ export class LocalParticipant extends Participant {
 
   constructor(info: ParticipantInfo, private room: Room) {
     super(info);
+    this.codecPref = room.options.videoCodec;
     if (room.options.adaptiveSend) this.sendTimer = setInterval(() => this.controlSend(), 250);
   }
 
@@ -837,9 +872,10 @@ export class LocalParticipant extends Participant {
     if (!enabled) return void (await this.unpublish("camera"));
     this.checkCanPublish();
     if (this.tracks.has("camera")) return this.tracks.get("camera") as LocalVideoTrack;
+    const specs = CameraPresets[this.cameraRes].renditions;
+    const ranked = await this.rankCodecs(specs);
     const stream = await this.open("videoinput", constraints);
-    this.videoCodec ??= pickVideoCodec();
-    const track = new LocalVideoTrack(stream.getVideoTracks()[0], TrackSource.CAMERA, await this.videoCodec, CameraPresets[this.cameraRes].renditions);
+    const track = this.newVideoTrack(stream.getVideoTracks()[0], TrackSource.CAMERA, ranked, specs);
     await this.applyProcessor(track);
     return this.publish(track) as Promise<LocalVideoTrack>;
   }
@@ -873,8 +909,100 @@ export class LocalParticipant extends Participant {
     // Best effort: a camera that cannot do the size (or is shared with
     // another tab at a lower one) keeps its own, and renditions never upscale.
     await track.capturedTrack.applyConstraints({ width, height, frameRate }).catch((e) => console.warn("moqit: camera resolution", e));
-    track.setRenditions(CameraPresets[resolution].renditions);
+    const specs = CameraPresets[resolution].renditions;
+    const { codecs, hardware } = await this.rankCodecs(specs);
+    track.setRenditions(specs);
+    track.setCodecs(codecs);
+    track.hardware = hardware;
     await this.syncTracks();
+  }
+
+  /** The video codec asked for with setVideoCodec (or RoomOptions.videoCodec); "auto" by default. */
+  get videoCodecPreference(): VideoCodecPreference {
+    return this.codecPref;
+  }
+
+  /** The codec the camera (or else the screen share) is sent in first; undefined with no video. */
+  get videoCodec(): VideoCodec | undefined {
+    const t = (this.getTrack(TrackSource.CAMERA) ?? this.getTrack(TrackSource.SCREEN)) as LocalVideoTrack | undefined;
+    return t?.codecs[0];
+  }
+
+  /**
+   * What this device can do with each video codec at the camera's send
+   * resolution, and whether the room allows it: for choosing with
+   * setVideoCodec.
+   */
+  async videoCodecs(): Promise<(CodecSupport & { allowed: boolean; failed: boolean })[]> {
+    const allowed = this.room.videoCodecs;
+    const support = await probeVideoCodecs(CameraPresets[this.cameraRes].renditions);
+    return support.map((s) => ({ ...s, allowed: allowed.length === 0 || allowed.includes(s.codec), failed: this.brokenCodecs.has(s.codec) }));
+  }
+
+  /**
+   * Sends video in another codec, live: subscribers move to it once its
+   * keyframe arrives; those that can't decode it keep receiving an
+   * alternative. "auto" returns to the automatic choice. Rejects a codec
+   * this device can't encode or the room doesn't allow.
+   */
+  async setVideoCodec(codec: VideoCodecPreference): Promise<void> {
+    if (codec !== "auto") {
+      const s = (await this.videoCodecs()).find((c) => c.codec === codec);
+      if (!s?.encode) throw new Error(`${codec} can't be encoded here`);
+      if (!s.allowed) throw new Error(`${codec} is not allowed in this room`);
+    }
+    this.codecPref = codec;
+    this.brokenCodecs.delete(codec as VideoCodec);
+    await this.recodec();
+  }
+
+  /** @internal The room's codec policy changed: move off codecs no longer allowed. */
+  codecPolicyChanged(): Promise<void> {
+    return this.recodec();
+  }
+
+  // Ranks the codecs again for every video track and announces the change.
+  private recodec(): Promise<void> {
+    return this.codecSerial.run(async () => {
+      const video = [...this.tracks.values()].filter((t): t is LocalVideoTrack => t instanceof LocalVideoTrack);
+      if (video.length === 0) return;
+      for (const t of video) {
+        const { codecs, hardware } = await this.rankCodecs(t.specs);
+        t.hardware = hardware;
+        if (codecs.join() !== t.codecs.join()) t.setCodecs(codecs);
+      }
+      await this.syncTracks();
+    });
+  }
+
+  // The codecs to offer for renditions, preferred first.
+  private async rankCodecs(specs: readonly RenditionSpec[]): Promise<{ codecs: VideoCodec[]; hardware: Set<VideoCodec> }> {
+    const support = await probeVideoCodecs([...specs]);
+    const opts = { preference: this.codecPref, allowed: this.room.videoCodecs, broken: this.brokenCodecs };
+    let codecs = rankCodecs(support, opts);
+    // Every codec failed at some point: try them again rather than send nothing.
+    if (codecs.length === 0) codecs = rankCodecs(support, { ...opts, broken: undefined });
+    if (codecs.length === 0) throw new Error(this.room.videoCodecs.length ? `no video encoder for the room's codecs (${this.room.videoCodecs.join(", ")})` : "no supported video encoder");
+    return { codecs, hardware: new Set(support.filter((s) => s.hardware).map((s) => s.codec)) };
+  }
+
+  private newVideoTrack(
+    track: MediaStreamTrack, source: TrackSource, { codecs, hardware }: { codecs: VideoCodec[]; hardware: Set<VideoCodec> }, specs: RenditionSpec[],
+  ): LocalVideoTrack {
+    const t = new LocalVideoTrack(track, source, codecs, specs);
+    t.hardware = hardware;
+    t.onCodecFailure = (codec, reason) => this.codecFailed(codec, reason);
+    return t;
+  }
+
+  private codecFailed(codec: VideoCodec, reason: string) {
+    if (this.brokenCodecs.has(codec)) return;
+    // A codec asked for explicitly is only given up when it fails outright, not for being slow.
+    if (codec === this.codecPref && reason.startsWith("encoder too slow")) return;
+    console.warn(`moqit: video codec ${codec} given up: ${reason}`);
+    this.brokenCodecs.add(codec);
+    this.room.emitCodecFallback(codec, reason);
+    void this.recodec().catch((e) => console.warn("moqit: video codec fallback", e));
   }
 
   private cameraConstraints(): MediaTrackConstraints {
@@ -970,8 +1098,13 @@ export class LocalParticipant extends Participant {
     }
     const videoTrack = stream.getVideoTracks()[0];
     videoTrack.contentHint = "detail"; // text and UI: favour sharpness over motion
-    this.videoCodec ??= pickVideoCodec();
-    const screen = new LocalVideoTrack(videoTrack, TrackSource.SCREEN, await this.videoCodec, ScreenRenditions);
+    let screen: LocalVideoTrack;
+    try {
+      screen = this.newVideoTrack(videoTrack, TrackSource.SCREEN, await this.rankCodecs(ScreenRenditions), ScreenRenditions);
+    } catch (e) {
+      stream.getTracks().forEach((t) => t.stop());
+      throw e;
+    }
     const audioTrack = stream.getAudioTracks()[0];
     const screenAudio = audioTrack ? new LocalAudioTrack(audioTrack, TrackSource.SCREEN_AUDIO) : undefined;
     videoTrack.addEventListener("ended", () => void this.setScreenShareEnabled(false));

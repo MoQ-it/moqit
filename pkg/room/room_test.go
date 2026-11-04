@@ -98,6 +98,7 @@ type client struct {
 
 	mu      sync.Mutex
 	state   map[string]*moqitv1.ParticipantInfo
+	room    *moqitv1.Room
 	changed chan struct{}
 	inbox   chan *moqitv1.InboxMessage
 	signal  chan *moqt.TrackWriter
@@ -212,6 +213,7 @@ func (c *client) apply(u *moqitv1.RoomStateUpdate) {
 	switch x := u.Update.(type) {
 	case *moqitv1.RoomStateUpdate_Snapshot:
 		c.state = map[string]*moqitv1.ParticipantInfo{}
+		c.room = x.Snapshot.Room
 		for _, p := range x.Snapshot.Participants {
 			c.state[p.Identity] = p
 		}
@@ -219,6 +221,8 @@ func (c *client) apply(u *moqitv1.RoomStateUpdate) {
 		c.state[x.ParticipantUpdated.Identity] = x.ParticipantUpdated
 	case *moqitv1.RoomStateUpdate_ParticipantLeft:
 		delete(c.state, x.ParticipantLeft.Identity)
+	case *moqitv1.RoomStateUpdate_RoomUpdated:
+		c.room = x.RoomUpdated
 	}
 	c.mu.Unlock()
 	select {
@@ -462,6 +466,74 @@ func expectRejected(t *testing.T, what string, n *node, tok string) {
 	case <-time.After(3 * time.Second):
 		t.Errorf("%s: session was not rejected", what)
 	}
+}
+
+func TestVideoEncodingsAndCodecPolicy(t *testing.T) {
+	n := newNode(t, room.Config{})
+	ctx := context.Background()
+	if _, err := n.m.CreateRoom(ctx, &moqitv1.CreateRoomRequest{Name: "r1", VideoCodecs: []string{"h265x"}}); !errors.Is(err, room.ErrInvalid) {
+		t.Fatalf("unknown codec in policy: %v", err)
+	}
+	if _, err := n.m.CreateRoom(ctx, &moqitv1.CreateRoomRequest{Name: "r1", VideoCodecs: []string{"h264", "vp8"}}); err != nil {
+		t.Fatal(err)
+	}
+	alice := join(t, n, "alice", auth.RoomGrant{})
+	alice.waitState("alice", present("alice"))
+	camera := func(codec string, encs ...*moqitv1.VideoEncoding) *moqitv1.ClientSignal {
+		name := "camera-h.avc"
+		if len(encs) > 0 {
+			name = encs[0].TrackName
+		}
+		return &moqitv1.ClientSignal{Signal: &moqitv1.ClientSignal_SetTracks{SetTracks: &moqitv1.SetTracks{Tracks: []*moqitv1.TrackInfo{{
+			Name: "camera", Kind: moqitv1.TrackKind_TRACK_KIND_VIDEO, Source: moqitv1.TrackSource_TRACK_SOURCE_CAMERA, Codec: codec,
+			Renditions: []*moqitv1.Rendition{{TrackName: name, Width: 1280, Height: 720, Encodings: encs}},
+		}}}}}
+	}
+	enc := func(name, codec string) *moqitv1.VideoEncoding {
+		return &moqitv1.VideoEncoding{TrackName: name, Codec: codec}
+	}
+	for what, c := range map[string]struct {
+		cs   *moqitv1.ClientSignal
+		want moqitv1.RequestResult
+	}{
+		"h264 and vp8":             {camera("avc1.42e01f", enc("camera-h.avc", "avc1.42e01f"), enc("camera-h.vp8", "vp8")), moqitv1.RequestResult_REQUEST_RESULT_OK},
+		"av1 alternative":          {camera("avc1.42e01f", enc("camera-h.avc", "avc1.42e01f"), enc("camera-h.av1", "av01.0.05M.08")), moqitv1.RequestResult_REQUEST_RESULT_NOT_ALLOWED},
+		"av1 primary, no list":     {camera("av01.0.05M.08"), moqitv1.RequestResult_REQUEST_RESULT_NOT_ALLOWED},
+		"first is not primary":     {camera("avc1.42e01f", enc("camera-h.vp8", "vp8"), enc("camera-h.avc", "avc1.42e01f")), moqitv1.RequestResult_REQUEST_RESULT_NOT_ALLOWED},
+		"name used twice":          {camera("vp8", enc("camera-h.vp8", "vp8"), enc("camera-h.vp8", "vp8")), moqitv1.RequestResult_REQUEST_RESULT_NOT_ALLOWED},
+		"encoding of other source": {camera("vp8", enc("camera-h.vp8", "vp8"), enc("screen-h.avc", "avc1.42e01f")), moqitv1.RequestResult_REQUEST_RESULT_NOT_ALLOWED},
+	} {
+		if r := alice.send(c.cs); r.Result != c.want {
+			t.Errorf("%s: %v, want %v", what, r, c.want)
+		}
+	}
+
+	if _, err := n.m.SetRoomVideoCodecs(ctx, "r1", []string{"av2"}); !errors.Is(err, room.ErrInvalid) {
+		t.Errorf("unknown codec: %v", err)
+	}
+	if _, err := n.m.SetRoomVideoCodecs(ctx, "nowhere", nil); !errors.Is(err, room.ErrNotFound) {
+		t.Errorf("unknown room: %v", err)
+	}
+	info, err := n.m.SetRoomVideoCodecs(ctx, "r1", nil)
+	if err != nil || len(info.VideoCodecs) != 0 {
+		t.Fatalf("allow all: %v %v", info, err)
+	}
+	alice.waitState("room update allowing every codec", func(map[string]*moqitv1.ParticipantInfo) bool {
+		return alice.room != nil && len(alice.room.VideoCodecs) == 0
+	})
+	if r := alice.send(camera("avc1.42e01f", enc("camera-h.avc", "avc1.42e01f"), enc("camera-h.av1", "av01.0.05M.08"))); r.Result != moqitv1.RequestResult_REQUEST_RESULT_OK {
+		t.Errorf("av1 once allowed: %v", r)
+	}
+	alice.waitState("encodings announced", func(s map[string]*moqitv1.ParticipantInfo) bool {
+		ts := s["alice"].GetTracks()
+		return len(ts) == 1 && len(ts[0].Renditions[0].Encodings) == 2 && ts[0].Renditions[0].Encodings[1].TrackName == "camera-h.av1"
+	})
+	if _, err := n.m.SetRoomVideoCodecs(ctx, "r1", []string{"vp9"}); err != nil {
+		t.Fatal(err)
+	}
+	alice.waitState("room update to vp9 only", func(map[string]*moqitv1.ParticipantInfo) bool {
+		return alice.room != nil && slices.Equal(alice.room.VideoCodecs, []string{"vp9"})
+	})
 }
 
 func TestActiveSpeakers(t *testing.T) {

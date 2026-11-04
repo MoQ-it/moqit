@@ -304,9 +304,10 @@ type Room struct {
 	DepartureTimeout uint32                 `protobuf:"varint,5,opt,name=departure_timeout,json=departureTimeout,proto3" json:"departure_timeout,omitempty"` // seconds a room lives on after the last participant leaves
 	MaxParticipants  uint32                 `protobuf:"varint,6,opt,name=max_participants,json=maxParticipants,proto3" json:"max_participants,omitempty"`    // 0 = unlimited
 	NumParticipants  uint32                 `protobuf:"varint,7,opt,name=num_participants,json=numParticipants,proto3" json:"num_participants,omitempty"`
-	CreatedAt        int64                  `protobuf:"varint,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`    // unix ms
-	NumViewers       uint32                 `protobuf:"varint,9,opt,name=num_viewers,json=numViewers,proto3" json:"num_viewers,omitempty"` // read-only viewers on every node, refreshed every few seconds
-	DvrWindow        uint32                 `protobuf:"varint,10,opt,name=dvr_window,json=dvrWindow,proto3" json:"dvr_window,omitempty"`   // seconds of history viewers can rewind; 0 = off
+	CreatedAt        int64                  `protobuf:"varint,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`       // unix ms
+	NumViewers       uint32                 `protobuf:"varint,9,opt,name=num_viewers,json=numViewers,proto3" json:"num_viewers,omitempty"`    // read-only viewers on every node, refreshed every few seconds
+	DvrWindow        uint32                 `protobuf:"varint,10,opt,name=dvr_window,json=dvrWindow,proto3" json:"dvr_window,omitempty"`      // seconds of history viewers can rewind; 0 = off
+	VideoCodecs      []string               `protobuf:"bytes,11,rep,name=video_codecs,json=videoCodecs,proto3" json:"video_codecs,omitempty"` // video codecs participants may publish ("h264", "h265", "vp8", "vp9", "av1"); empty = all
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -411,15 +412,26 @@ func (x *Room) GetDvrWindow() uint32 {
 	return 0
 }
 
+func (x *Room) GetVideoCodecs() []string {
+	if x != nil {
+		return x.VideoCodecs
+	}
+	return nil
+}
+
 // One encoding of a track, published as its own MoQ track in the
 // participant's namespace ("moqit", room, "p", identity).
 type Rendition struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TrackName     string                 `protobuf:"bytes,1,opt,name=track_name,json=trackName,proto3" json:"track_name,omitempty"` // MoQ track name, e.g. "camera-h"
-	Width         uint32                 `protobuf:"varint,2,opt,name=width,proto3" json:"width,omitempty"`
-	Height        uint32                 `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`
-	Bitrate       uint32                 `protobuf:"varint,4,opt,name=bitrate,proto3" json:"bitrate,omitempty"` // bits per second
-	Framerate     uint32                 `protobuf:"varint,5,opt,name=framerate,proto3" json:"framerate,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	TrackName string                 `protobuf:"bytes,1,opt,name=track_name,json=trackName,proto3" json:"track_name,omitempty"` // MoQ track name, e.g. "camera-h"
+	Width     uint32                 `protobuf:"varint,2,opt,name=width,proto3" json:"width,omitempty"`
+	Height    uint32                 `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`
+	Bitrate   uint32                 `protobuf:"varint,4,opt,name=bitrate,proto3" json:"bitrate,omitempty"` // bits per second
+	Framerate uint32                 `protobuf:"varint,5,opt,name=framerate,proto3" json:"framerate,omitempty"`
+	// The rendition's encodings, one MoQ track per codec, in the publisher's
+	// order of preference. The first is track_name in TrackInfo.codec. Empty
+	// means that one only.
+	Encodings     []*VideoEncoding `protobuf:"bytes,6,rep,name=encodings,proto3" json:"encodings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -489,6 +501,66 @@ func (x *Rendition) GetFramerate() uint32 {
 	return 0
 }
 
+func (x *Rendition) GetEncodings() []*VideoEncoding {
+	if x != nil {
+		return x.Encodings
+	}
+	return nil
+}
+
+// A rendition in one codec. A track name's codec family never changes.
+type VideoEncoding struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TrackName     string                 `protobuf:"bytes,1,opt,name=track_name,json=trackName,proto3" json:"track_name,omitempty"` // e.g. "camera-h.av1"
+	Codec         string                 `protobuf:"bytes,2,opt,name=codec,proto3" json:"codec,omitempty"`                          // WebCodecs codec string
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VideoEncoding) Reset() {
+	*x = VideoEncoding{}
+	mi := &file_moqit_v1_models_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VideoEncoding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VideoEncoding) ProtoMessage() {}
+
+func (x *VideoEncoding) ProtoReflect() protoreflect.Message {
+	mi := &file_moqit_v1_models_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VideoEncoding.ProtoReflect.Descriptor instead.
+func (*VideoEncoding) Descriptor() ([]byte, []int) {
+	return file_moqit_v1_models_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *VideoEncoding) GetTrackName() string {
+	if x != nil {
+		return x.TrackName
+	}
+	return ""
+}
+
+func (x *VideoEncoding) GetCodec() string {
+	if x != nil {
+		return x.Codec
+	}
+	return ""
+}
+
 type TrackInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Sid           string                 `protobuf:"bytes,1,opt,name=sid,proto3" json:"sid,omitempty"` // assigned by the server
@@ -505,7 +577,7 @@ type TrackInfo struct {
 
 func (x *TrackInfo) Reset() {
 	*x = TrackInfo{}
-	mi := &file_moqit_v1_models_proto_msgTypes[2]
+	mi := &file_moqit_v1_models_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -517,7 +589,7 @@ func (x *TrackInfo) String() string {
 func (*TrackInfo) ProtoMessage() {}
 
 func (x *TrackInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_moqit_v1_models_proto_msgTypes[2]
+	mi := &file_moqit_v1_models_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -530,7 +602,7 @@ func (x *TrackInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrackInfo.ProtoReflect.Descriptor instead.
 func (*TrackInfo) Descriptor() ([]byte, []int) {
-	return file_moqit_v1_models_proto_rawDescGZIP(), []int{2}
+	return file_moqit_v1_models_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *TrackInfo) GetSid() string {
@@ -603,7 +675,7 @@ type ParticipantPermission struct {
 
 func (x *ParticipantPermission) Reset() {
 	*x = ParticipantPermission{}
-	mi := &file_moqit_v1_models_proto_msgTypes[3]
+	mi := &file_moqit_v1_models_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -615,7 +687,7 @@ func (x *ParticipantPermission) String() string {
 func (*ParticipantPermission) ProtoMessage() {}
 
 func (x *ParticipantPermission) ProtoReflect() protoreflect.Message {
-	mi := &file_moqit_v1_models_proto_msgTypes[3]
+	mi := &file_moqit_v1_models_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -628,7 +700,7 @@ func (x *ParticipantPermission) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ParticipantPermission.ProtoReflect.Descriptor instead.
 func (*ParticipantPermission) Descriptor() ([]byte, []int) {
-	return file_moqit_v1_models_proto_rawDescGZIP(), []int{3}
+	return file_moqit_v1_models_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ParticipantPermission) GetCanSubscribe() bool {
@@ -691,7 +763,7 @@ type ParticipantInfo struct {
 
 func (x *ParticipantInfo) Reset() {
 	*x = ParticipantInfo{}
-	mi := &file_moqit_v1_models_proto_msgTypes[4]
+	mi := &file_moqit_v1_models_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -703,7 +775,7 @@ func (x *ParticipantInfo) String() string {
 func (*ParticipantInfo) ProtoMessage() {}
 
 func (x *ParticipantInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_moqit_v1_models_proto_msgTypes[4]
+	mi := &file_moqit_v1_models_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -716,7 +788,7 @@ func (x *ParticipantInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ParticipantInfo.ProtoReflect.Descriptor instead.
 func (*ParticipantInfo) Descriptor() ([]byte, []int) {
-	return file_moqit_v1_models_proto_rawDescGZIP(), []int{4}
+	return file_moqit_v1_models_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ParticipantInfo) GetSid() string {
@@ -799,7 +871,7 @@ type SpeakerInfo struct {
 
 func (x *SpeakerInfo) Reset() {
 	*x = SpeakerInfo{}
-	mi := &file_moqit_v1_models_proto_msgTypes[5]
+	mi := &file_moqit_v1_models_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -811,7 +883,7 @@ func (x *SpeakerInfo) String() string {
 func (*SpeakerInfo) ProtoMessage() {}
 
 func (x *SpeakerInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_moqit_v1_models_proto_msgTypes[5]
+	mi := &file_moqit_v1_models_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -824,7 +896,7 @@ func (x *SpeakerInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpeakerInfo.ProtoReflect.Descriptor instead.
 func (*SpeakerInfo) Descriptor() ([]byte, []int) {
-	return file_moqit_v1_models_proto_rawDescGZIP(), []int{5}
+	return file_moqit_v1_models_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SpeakerInfo) GetIdentity() string {
@@ -856,7 +928,7 @@ type DvrIndex struct {
 
 func (x *DvrIndex) Reset() {
 	*x = DvrIndex{}
-	mi := &file_moqit_v1_models_proto_msgTypes[6]
+	mi := &file_moqit_v1_models_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -868,7 +940,7 @@ func (x *DvrIndex) String() string {
 func (*DvrIndex) ProtoMessage() {}
 
 func (x *DvrIndex) ProtoReflect() protoreflect.Message {
-	mi := &file_moqit_v1_models_proto_msgTypes[6]
+	mi := &file_moqit_v1_models_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -881,7 +953,7 @@ func (x *DvrIndex) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DvrIndex.ProtoReflect.Descriptor instead.
 func (*DvrIndex) Descriptor() ([]byte, []int) {
-	return file_moqit_v1_models_proto_rawDescGZIP(), []int{6}
+	return file_moqit_v1_models_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *DvrIndex) GetEarliest() int64 {
@@ -928,7 +1000,7 @@ type DvrEpoch struct {
 
 func (x *DvrEpoch) Reset() {
 	*x = DvrEpoch{}
-	mi := &file_moqit_v1_models_proto_msgTypes[7]
+	mi := &file_moqit_v1_models_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -940,7 +1012,7 @@ func (x *DvrEpoch) String() string {
 func (*DvrEpoch) ProtoMessage() {}
 
 func (x *DvrEpoch) ProtoReflect() protoreflect.Message {
-	mi := &file_moqit_v1_models_proto_msgTypes[7]
+	mi := &file_moqit_v1_models_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -953,7 +1025,7 @@ func (x *DvrEpoch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DvrEpoch.ProtoReflect.Descriptor instead.
 func (*DvrEpoch) Descriptor() ([]byte, []int) {
-	return file_moqit_v1_models_proto_rawDescGZIP(), []int{7}
+	return file_moqit_v1_models_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *DvrEpoch) GetEpoch() uint32 {
@@ -1011,7 +1083,7 @@ type DvrCheckpoint struct {
 
 func (x *DvrCheckpoint) Reset() {
 	*x = DvrCheckpoint{}
-	mi := &file_moqit_v1_models_proto_msgTypes[8]
+	mi := &file_moqit_v1_models_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1023,7 +1095,7 @@ func (x *DvrCheckpoint) String() string {
 func (*DvrCheckpoint) ProtoMessage() {}
 
 func (x *DvrCheckpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_moqit_v1_models_proto_msgTypes[8]
+	mi := &file_moqit_v1_models_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1036,7 +1108,7 @@ func (x *DvrCheckpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DvrCheckpoint.ProtoReflect.Descriptor instead.
 func (*DvrCheckpoint) Descriptor() ([]byte, []int) {
-	return file_moqit_v1_models_proto_rawDescGZIP(), []int{8}
+	return file_moqit_v1_models_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *DvrCheckpoint) GetTrack() string {
@@ -1071,7 +1143,7 @@ var File_moqit_v1_models_proto protoreflect.FileDescriptor
 
 const file_moqit_v1_models_proto_rawDesc = "" +
 	"\n" +
-	"\x15moqit/v1/models.proto\x12\bmoqit.v1\"\xcf\x02\n" +
+	"\x15moqit/v1/models.proto\x12\bmoqit.v1\"\xf2\x02\n" +
 	"\x04Room\x12\x10\n" +
 	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
@@ -1086,14 +1158,20 @@ const file_moqit_v1_models_proto_rawDesc = "" +
 	"numViewers\x12\x1d\n" +
 	"\n" +
 	"dvr_window\x18\n" +
-	" \x01(\rR\tdvrWindow\"\x90\x01\n" +
+	" \x01(\rR\tdvrWindow\x12!\n" +
+	"\fvideo_codecs\x18\v \x03(\tR\vvideoCodecs\"\xc7\x01\n" +
 	"\tRendition\x12\x1d\n" +
 	"\n" +
 	"track_name\x18\x01 \x01(\tR\ttrackName\x12\x14\n" +
 	"\x05width\x18\x02 \x01(\rR\x05width\x12\x16\n" +
 	"\x06height\x18\x03 \x01(\rR\x06height\x12\x18\n" +
 	"\abitrate\x18\x04 \x01(\rR\abitrate\x12\x1c\n" +
-	"\tframerate\x18\x05 \x01(\rR\tframerate\"\x86\x02\n" +
+	"\tframerate\x18\x05 \x01(\rR\tframerate\x125\n" +
+	"\tencodings\x18\x06 \x03(\v2\x17.moqit.v1.VideoEncodingR\tencodings\"D\n" +
+	"\rVideoEncoding\x12\x1d\n" +
+	"\n" +
+	"track_name\x18\x01 \x01(\tR\ttrackName\x12\x14\n" +
+	"\x05codec\x18\x02 \x01(\tR\x05codec\"\x86\x02\n" +
 	"\tTrackInfo\x12\x10\n" +
 	"\x03sid\x18\x01 \x01(\tR\x03sid\x12'\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x13.moqit.v1.TrackKindR\x04kind\x12-\n" +
@@ -1195,7 +1273,7 @@ func file_moqit_v1_models_proto_rawDescGZIP() []byte {
 }
 
 var file_moqit_v1_models_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_moqit_v1_models_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_moqit_v1_models_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_moqit_v1_models_proto_goTypes = []any{
 	(TrackKind)(0),                // 0: moqit.v1.TrackKind
 	(TrackSource)(0),              // 1: moqit.v1.TrackSource
@@ -1204,31 +1282,33 @@ var file_moqit_v1_models_proto_goTypes = []any{
 	(ConnectionQuality)(0),        // 4: moqit.v1.ConnectionQuality
 	(*Room)(nil),                  // 5: moqit.v1.Room
 	(*Rendition)(nil),             // 6: moqit.v1.Rendition
-	(*TrackInfo)(nil),             // 7: moqit.v1.TrackInfo
-	(*ParticipantPermission)(nil), // 8: moqit.v1.ParticipantPermission
-	(*ParticipantInfo)(nil),       // 9: moqit.v1.ParticipantInfo
-	(*SpeakerInfo)(nil),           // 10: moqit.v1.SpeakerInfo
-	(*DvrIndex)(nil),              // 11: moqit.v1.DvrIndex
-	(*DvrEpoch)(nil),              // 12: moqit.v1.DvrEpoch
-	(*DvrCheckpoint)(nil),         // 13: moqit.v1.DvrCheckpoint
-	nil,                           // 14: moqit.v1.ParticipantInfo.AttributesEntry
+	(*VideoEncoding)(nil),         // 7: moqit.v1.VideoEncoding
+	(*TrackInfo)(nil),             // 8: moqit.v1.TrackInfo
+	(*ParticipantPermission)(nil), // 9: moqit.v1.ParticipantPermission
+	(*ParticipantInfo)(nil),       // 10: moqit.v1.ParticipantInfo
+	(*SpeakerInfo)(nil),           // 11: moqit.v1.SpeakerInfo
+	(*DvrIndex)(nil),              // 12: moqit.v1.DvrIndex
+	(*DvrEpoch)(nil),              // 13: moqit.v1.DvrEpoch
+	(*DvrCheckpoint)(nil),         // 14: moqit.v1.DvrCheckpoint
+	nil,                           // 15: moqit.v1.ParticipantInfo.AttributesEntry
 }
 var file_moqit_v1_models_proto_depIdxs = []int32{
-	0,  // 0: moqit.v1.TrackInfo.kind:type_name -> moqit.v1.TrackKind
-	1,  // 1: moqit.v1.TrackInfo.source:type_name -> moqit.v1.TrackSource
-	6,  // 2: moqit.v1.TrackInfo.renditions:type_name -> moqit.v1.Rendition
-	1,  // 3: moqit.v1.ParticipantPermission.can_publish_sources:type_name -> moqit.v1.TrackSource
-	2,  // 4: moqit.v1.ParticipantInfo.state:type_name -> moqit.v1.ParticipantState
-	14, // 5: moqit.v1.ParticipantInfo.attributes:type_name -> moqit.v1.ParticipantInfo.AttributesEntry
-	8,  // 6: moqit.v1.ParticipantInfo.permission:type_name -> moqit.v1.ParticipantPermission
-	7,  // 7: moqit.v1.ParticipantInfo.tracks:type_name -> moqit.v1.TrackInfo
-	12, // 8: moqit.v1.DvrIndex.epochs:type_name -> moqit.v1.DvrEpoch
-	13, // 9: moqit.v1.DvrIndex.checkpoints:type_name -> moqit.v1.DvrCheckpoint
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	7,  // 0: moqit.v1.Rendition.encodings:type_name -> moqit.v1.VideoEncoding
+	0,  // 1: moqit.v1.TrackInfo.kind:type_name -> moqit.v1.TrackKind
+	1,  // 2: moqit.v1.TrackInfo.source:type_name -> moqit.v1.TrackSource
+	6,  // 3: moqit.v1.TrackInfo.renditions:type_name -> moqit.v1.Rendition
+	1,  // 4: moqit.v1.ParticipantPermission.can_publish_sources:type_name -> moqit.v1.TrackSource
+	2,  // 5: moqit.v1.ParticipantInfo.state:type_name -> moqit.v1.ParticipantState
+	15, // 6: moqit.v1.ParticipantInfo.attributes:type_name -> moqit.v1.ParticipantInfo.AttributesEntry
+	9,  // 7: moqit.v1.ParticipantInfo.permission:type_name -> moqit.v1.ParticipantPermission
+	8,  // 8: moqit.v1.ParticipantInfo.tracks:type_name -> moqit.v1.TrackInfo
+	13, // 9: moqit.v1.DvrIndex.epochs:type_name -> moqit.v1.DvrEpoch
+	14, // 10: moqit.v1.DvrIndex.checkpoints:type_name -> moqit.v1.DvrCheckpoint
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_moqit_v1_models_proto_init() }
@@ -1242,7 +1322,7 @@ func file_moqit_v1_models_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_moqit_v1_models_proto_rawDesc), len(file_moqit_v1_models_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   10,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

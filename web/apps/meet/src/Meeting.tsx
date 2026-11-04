@@ -226,7 +226,7 @@ function PreJoin({ room, onJoin }: { room: string; onJoin: (c: Choices) => void 
 }
 
 function InRoom({ roomName, choices }: { roomName: string; choices: Choices }) {
-  const [room] = useState(() => new Room());
+  const [room] = useState(() => new Room({ videoCodec: choices.quality.codec }));
   const [error, setError] = useState("");
   const [state, setState] = useState<ConnectionState>(ConnectionState.Connecting);
   const [chatOpen, setChatOpen] = useState(false);

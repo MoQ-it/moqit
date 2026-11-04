@@ -1,21 +1,35 @@
 // Browser side of e2e_test.go: two participants and a viewer in one page,
 // each with its own Room (and WebTransport session), exercising the SDK end
 // to end.
-import { type RemoteAudioTrack, type RemoteVideoTrack, Room, TrackSource } from "../../web/packages/client/src/index.ts";
+import { codecOf, type RemoteAudioTrack, type RemoteVideoTrack, Room, TrackSource, type VideoCodec } from "../../web/packages/client/src/index.ts";
 
 // Failure injection: while failDecodes > 0, a decode() fails the way a
-// hardware decoder can, closing the decoder and reporting an error.
+// hardware decoder can, closing the decoder and reporting an error;
+// decoders of failCodec fail every time. Receivers here can't decode VP9
+// at all, like a browser without it.
 let failDecodes = 0;
+let failCodec: VideoCodec | undefined;
+const NO_DECODER: VideoCodec = "vp9";
 const RealDecoder = globalThis.VideoDecoder;
 globalThis.VideoDecoder = class extends RealDecoder {
   private onError: (e: DOMException) => void;
+  private codec = "";
   constructor(init: VideoDecoderInit) {
     super(init);
     this.onError = init.error;
   }
+  static isConfigSupported(c: VideoDecoderConfig) {
+    if (codecOf(c.codec) === NO_DECODER) return Promise.resolve({ supported: false, config: c });
+    return RealDecoder.isConfigSupported(c);
+  }
+  configure(c: VideoDecoderConfig) {
+    this.codec = c.codec;
+    super.configure(c);
+  }
   decode(chunk: EncodedVideoChunk) {
-    if (failDecodes > 0 && this.state === "configured") {
-      failDecodes--;
+    const failing = failDecodes > 0 || (failCodec !== undefined && codecOf(this.codec) === failCodec);
+    if (failing && this.state === "configured") {
+      if (failDecodes > 0) failDecodes--;
       this.close();
       this.onError(new DOMException("injected decoder failure", "EncodingError"));
       return;
@@ -202,6 +216,59 @@ async function main() {
     el.style.display = "";
     mark = video!.framesDecoded;
     await until("video resumes when shown again", () => video!.framesDecoded > mark + 10);
+
+    // Codecs: Alice switches live through every codec she can encode.
+    // Bob follows, except to VP9, which he can't decode: he keeps an
+    // alternative. A decoder failing on every frame moves him to another.
+    const support = await alice.localParticipant.videoCodecs();
+    result.codecs = support.map((c) => `${c.codec} ${c.encode ? (c.hardware ? "hw" : "sw") : "no"}-encode`).join(", ");
+    step(`codecs: ${result.codecs}`);
+    const encodable = support.filter((c) => c.encode).map((c) => c.codec);
+    if (!encodable.includes("h264") && !encodable.includes("vp8")) throw new Error(`neither H.264 nor VP8 encodes: ${result.codecs}`);
+    // The longest time without a new frame while f runs.
+    const longestStall = async (f: () => Promise<void>) => {
+      let longest = 0, last = performance.now(), frames = video!.framesDecoded, running = true;
+      const watch = (async () => {
+        while (running) {
+          await sleep(20);
+          if (video!.framesDecoded !== frames) {
+            frames = video!.framesDecoded;
+            last = performance.now();
+          }
+          longest = Math.max(longest, performance.now() - last);
+        }
+      })();
+      try {
+        await f();
+      } finally {
+        running = false;
+        await watch;
+      }
+      return longest;
+    };
+    const switches: string[] = [];
+    for (const codec of encodable) {
+      const stall = await longestStall(async () => {
+        await alice.localParticipant.setVideoCodec(codec);
+        if (alice.localParticipant.videoCodec !== codec) throw new Error(`alice sends ${alice.localParticipant.videoCodec}, not ${codec}`);
+        const m = video!.framesDecoded;
+        const want = (c: string) => (codec === NO_DECODER ? codecOf(c) !== NO_DECODER : codecOf(c) === codec);
+        await until(`bob decodes alice's ${codec}${codec === NO_DECODER ? " as an alternative" : ""}`,
+          () => want(video!.codec) && video!.framesDecoded > m + 30, 20000);
+      });
+      switches.push(`${codec}→${codecOf(video!.codec)} (${pub.currentTrackName}, longest stall ${Math.round(stall)}ms)`);
+      // Firefox's H.264 encoder holds over a second of frames before its first output.
+      const limit = codec === "h264" && /Firefox\//.test(navigator.userAgent) ? 3000 : 1500;
+      if (stall > limit) throw new Error(`video stalled ${Math.round(stall)}ms switching to ${codec}`);
+    }
+    result.codecSwitches = switches.join("; ");
+    await alice.localParticipant.setVideoCodec("auto");
+    await until("bob back on alice's automatic codec", () => codecOf(video!.codec) === alice.localParticipant.videoCodec, 20000);
+    failCodec = codecOf(video!.codec);
+    mark = video!.framesDecoded;
+    await until(`a failing ${failCodec} decoder moves bob to another codec`, () => codecOf(video!.codec) !== failCodec && video!.framesDecoded > mark + 30, 20000);
+    result.codecFallback = `${failCodec} → ${codecOf(video!.codec)}`;
+    failCodec = undefined;
 
     // Broadcast data, targeted data, metadata.
     const got: string[] = [];

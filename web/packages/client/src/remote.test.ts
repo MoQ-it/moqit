@@ -1,7 +1,8 @@
 import { create } from "@bufbuild/protobuf";
 import { afterEach, expect, test, vi } from "vitest";
 import { TrackInfoSchema, TrackKind, TrackSource } from "./gen/moqit/v1/models_pb.ts";
-import { RemoteVideoTrack } from "./remote.ts";
+import { resetCodecCaches } from "./codecs.ts";
+import { RemoteTrackPublication, RemoteVideoTrack } from "./remote.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -100,4 +101,89 @@ test("a subscription superseded while it was being set up is dropped", async () 
   pending[2].resolve(make("camera-l"));
   await third;
   expect(subs.find((s) => s.name === "camera-l")!.unsubscribed).toBe(true);
+});
+
+// A publication of a camera in AV1 with an H.264 alternative, subscribed
+// through a session whose subscriptions never deliver.
+function publication(decodable: (codec: string) => boolean, encodings = [["camera-m.av1", "av01.0.05M.08"], ["camera-m.avc", "avc1.42e01f"]]) {
+  FakeDecoder.all = [];
+  vi.stubGlobal("VideoDecoder", Object.assign(FakeDecoder, { isConfigSupported: async (c: VideoDecoderConfig) => ({ supported: decodable(c.codec) }) }));
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  resetCodecCaches();
+  const subscribed: string[] = [];
+  const session = {
+    subscribe: async (track: { name: string }) => {
+      subscribed.push(track.name);
+      return { unsubscribe() {}, update: async () => {}, [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) };
+    },
+  };
+  const info = (encs: string[][]) => create(TrackInfoSchema, {
+    sid: "v", kind: TrackKind.VIDEO, source: TrackSource.CAMERA, codec: encs[0][1],
+    renditions: [{ trackName: encs[0][0], width: 640, height: 360, encodings: encs.map(([trackName, codec]) => ({ trackName, codec })) }],
+  });
+  const ctx = { session, room: "r", identity: "alice", audio: {}, adaptive: false, audioClock: () => undefined, volume: () => 1 };
+  const pub = new RemoteTrackPublication(info(encodings), ctx as never, "medium");
+  const unsupported: boolean[] = [];
+  pub.on("unsupported", (u) => unsupported.push(u));
+  return { pub, subscribed, info, unsupported };
+}
+
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+test("a subscriber takes the publisher's preferred codec when it can decode it", async () => {
+  const { pub, subscribed } = publication(() => true);
+  await pub.setSubscribed(true);
+  expect(subscribed).toEqual(["camera-m.av1"]);
+  expect(pub.currentRendition).toBe("camera-m");
+  expect(pub.currentTrackName).toBe("camera-m.av1");
+  expect((pub.track as RemoteVideoTrack).codec).toBe("av01.0.05M.08");
+  expect(FakeDecoder.all.map((d) => d.config?.codec)).toEqual(["av01.0.05M.08"]);
+});
+
+test("a subscriber that can't decode the preferred codec takes an alternative", async () => {
+  const { pub, subscribed } = publication((c) => !c.startsWith("av01"));
+  await pub.setSubscribed(true);
+  expect(subscribed).toEqual(["camera-m.avc"]);
+  expect(FakeDecoder.all.every((d) => d.config?.codec === "avc1.42e01f")).toBe(true);
+  expect(pub.unsupported).toBe(false);
+});
+
+test("a live codec switch moves subscribers; a codec failing to decode moves them to the next", async () => {
+  const { pub, subscribed, info } = publication(() => true, [["camera-m.avc", "avc1.42e01f"], ["camera-m.vp8", "vp8"]]);
+  await pub.setSubscribed(true);
+  pub.update(info([["camera-m.av1", "av01.0.05M.08"], ["camera-m.avc", "avc1.42e01f"], ["camera-m.vp8", "vp8"]]));
+  await settle();
+  expect(subscribed).toEqual(["camera-m.avc", "camera-m.av1"]);
+  expect((pub.track as RemoteVideoTrack).info.codec).toBe("av01.0.05M.08");
+
+  // A device that reports AV1 decodable but fails on every frame.
+  (pub.track as RemoteVideoTrack).onUndecodable!("av01.0.05M.08");
+  await settle();
+  expect(subscribed.at(-1)).toBe("camera-m.avc");
+  (pub.track as RemoteVideoTrack).onUndecodable!("avc1.42e01f");
+  await settle();
+  expect(subscribed.at(-1)).toBe("camera-m.vp8");
+});
+
+test("a video no codec of which decodes is flagged, until one is offered", async () => {
+  const { pub, subscribed, info, unsupported } = publication((c) => c === "vp8", [["camera-m.hevc", "hev1.1.6.L93.B0"]]);
+  await pub.setSubscribed(true);
+  expect(pub.isSubscribed).toBe(true);
+  expect(pub.unsupported).toBe(true);
+  expect((pub.track as RemoteVideoTrack).unsupported).toBe(true);
+  expect(subscribed).toEqual([]);
+  pub.update(info([["camera-m.hevc", "hev1.1.6.L93.B0"], ["camera-m.vp8", "vp8"]]));
+  await settle();
+  expect(subscribed).toEqual(["camera-m.vp8"]);
+  expect(unsupported).toEqual([true, false]);
+});
+
+test("a codec string changing under the same track reconfigures at the next Group", async () => {
+  const { pub, subscribed, info } = publication(() => true, [["camera-m.avc", "avc1.42e01f"]]);
+  await pub.setSubscribed(true);
+  pub.update(info([["camera-m.avc", "avc1.42e028"]]));
+  await settle();
+  expect(subscribed).toEqual(["camera-m.avc"]);
+  // Applied on the next Group, so the decoder in use keeps the old one until then.
+  expect((pub.track as RemoteVideoTrack).codec).toBe("avc1.42e01f");
 });

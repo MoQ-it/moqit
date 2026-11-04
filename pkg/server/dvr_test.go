@@ -246,3 +246,59 @@ func TestCreateRoomDvrWindow(t *testing.T) {
 		t.Errorf("default window %d; want 0", created.Msg.Room.DvrWindow)
 	}
 }
+
+// A video codec switch, under the same track name or by moving to another
+// encoding, starts a new epoch recorded with the new codec.
+func TestDVRCodecSwitch(t *testing.T) {
+	a := startNodeWith(t, nil, "A", withDVR(t, t.TempDir()))
+	alice := testclient.Join(t, a.addr, "r1", "alice", token(t, "alice", "r1"))
+	alice.WaitRoom("dvr_window in room state", func(r *moqitv1.Room) bool { return r.DvrWindow == 3600 })
+	camera := func(track, codec string) *moqitv1.ClientSignal {
+		return &moqitv1.ClientSignal{Signal: &moqitv1.ClientSignal_SetTracks{SetTracks: &moqitv1.SetTracks{Tracks: []*moqitv1.TrackInfo{{
+			Name: "camera", Kind: moqitv1.TrackKind_TRACK_KIND_VIDEO, Source: moqitv1.TrackSource_TRACK_SOURCE_CAMERA, Codec: codec,
+			Renditions: []*moqitv1.Rendition{{TrackName: track, Width: 640, Height: 360}},
+		}}}}}
+	}
+	carol := testclient.Watch(t, a.addr, "r1", viewerToken(t, "carol", "r1"))
+	epochs := func() map[string]string {
+		idx, _ := carol.DvrIndex("alice", 2)
+		codecs := map[string]string{}
+		for _, i := range idx {
+			for _, e := range i.Epochs {
+				codecs[e.Codec] = e.Track
+			}
+		}
+		return codecs
+	}
+	// The relay may keep its upstream subscription across a restart of the
+	// recording, so write to whichever writer of the track is live.
+	writers := map[string]*moqt.TrackWriter{}
+	var group uint64
+	record := func(track, codec string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for epochs()[codec] != track {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s in %s never recorded: %v", track, codec, epochs())
+			}
+			select {
+			case v := <-alice.Video:
+				writers[v.Name] = v.W
+			case <-time.After(100 * time.Millisecond):
+			}
+			if w := writers[track]; w != nil && w.Context().Err() == nil {
+				sg := w.OpenSubgroup(group, 0, moqt.SubgroupOptions{Properties: true})
+				sg.WriteObject(&v22.Object{ID: 0, Properties: v22.KeyValues{{Type: 0x10, Int: uint64(time.Now().UnixMicro())}}, Payload: []byte(track)})
+				sg.Close()
+				group++
+			}
+		}
+	}
+	steps := []struct{ track, codec string }{{"camera-m", "vp8"}, {"camera-m", "av01.0.05M.08"}, {"camera-m.vp9", "vp09.00.31.08"}}
+	for _, s := range steps {
+		if r := alice.Send(camera(s.track, s.codec)); r.Result != moqitv1.RequestResult_REQUEST_RESULT_OK {
+			t.Fatalf("%s: %v", s.codec, r)
+		}
+		record(s.track, s.codec)
+	}
+}

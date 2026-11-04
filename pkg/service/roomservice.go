@@ -65,6 +65,8 @@ func apiError(err error) error {
 		return nil
 	case errors.Is(err, room.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
+	case errors.Is(err, room.ErrInvalid):
+		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, context.DeadlineExceeded):
 		return connect.NewError(connect.CodeDeadlineExceeded, err)
 	}
@@ -109,6 +111,17 @@ func (s *RoomService) UpdateRoomMetadata(ctx context.Context, req *connect.Reque
 		return nil, apiError(err)
 	}
 	return connect.NewResponse(&moqitv1.UpdateRoomMetadataResponse{Room: r}), nil
+}
+
+func (s *RoomService) SetRoomVideoCodecs(ctx context.Context, req *connect.Request[moqitv1.SetRoomVideoCodecsRequest]) (*connect.Response[moqitv1.SetRoomVideoCodecsResponse], error) {
+	if err := s.authorize(req.Header(), needAdmin, req.Msg.Room); err != nil {
+		return nil, err
+	}
+	r, err := s.m.SetRoomVideoCodecs(ctx, req.Msg.Room, req.Msg.VideoCodecs)
+	if err != nil {
+		return nil, apiError(err)
+	}
+	return connect.NewResponse(&moqitv1.SetRoomVideoCodecsResponse{Room: r}), nil
 }
 
 func (s *RoomService) ListParticipants(ctx context.Context, req *connect.Request[moqitv1.ListParticipantsRequest]) (*connect.Response[moqitv1.ListParticipantsResponse], error) {

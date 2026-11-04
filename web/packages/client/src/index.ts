@@ -5,3 +5,6 @@ export { CameraPresets, CameraRenditions, ScreenRenditions, type RenditionSpec, 
 export { ParticipantState, TrackKind, TrackSource } from "./gen/moqit/v1/models_pb.ts";
 export type { ParticipantInfo, TrackInfo } from "./gen/moqit/v1/models_pb.ts";
 export type { Timeline } from "./dvr.ts";
+export {
+  type CodecSupport, codecOf, type VideoCodec, VideoCodecNames, type VideoCodecPreference, VideoCodecs, videoCodecName,
+} from "./codecs.ts";

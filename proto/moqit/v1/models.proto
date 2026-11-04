@@ -17,6 +17,7 @@ message Room {
   int64 created_at = 8; // unix ms
   uint32 num_viewers = 9; // read-only viewers on every node, refreshed every few seconds
   uint32 dvr_window = 10; // seconds of history viewers can rewind; 0 = off
+  repeated string video_codecs = 11; // video codecs participants may publish ("h264", "h265", "vp8", "vp9", "av1"); empty = all
 }
 
 enum TrackKind {
@@ -41,6 +42,16 @@ message Rendition {
   uint32 height = 3;
   uint32 bitrate = 4; // bits per second
   uint32 framerate = 5;
+  // The rendition's encodings, one MoQ track per codec, in the publisher's
+  // order of preference. The first is track_name in TrackInfo.codec. Empty
+  // means that one only.
+  repeated VideoEncoding encodings = 6;
+}
+
+// A rendition in one codec. A track name's codec family never changes.
+message VideoEncoding {
+  string track_name = 1; // e.g. "camera-h.av1"
+  string codec = 2; // WebCodecs codec string
 }
 
 message TrackInfo {

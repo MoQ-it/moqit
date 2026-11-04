@@ -20,6 +20,7 @@ It comes with a browser SDK, React components, a server API with webhooks, a Go 
 - **Rooms, participants and tracks** with JWT access tokens and fine-grained grants
 - **Camera, microphone and screen sharing** (with tab or system audio), encoded with WebCodecs
 - **Simulcast** — up to three layers per camera, each encoded only while someone watches it
+- **Video codecs** — H.264, VP8, VP9 and AV1 (H.265 unverified), picked per device and switched live; each viewer receives one it can decode
 - **Adaptive stream** — each viewer receives the layer that fits its video's size, and pauses hidden video
 - **Send-side adaptation** — publishers lower bitrates and layers when their uplink can't keep up, using delay measured by the server
 - **Send and receive quality control** — 180p to 1080p, switched live
@@ -110,7 +111,7 @@ A node listens on one UDP port (WebTransport at `/moq`, plus raw QUIC for other 
 | Browser | Status |
 |---|---|
 | Chrome, Edge and other Chromium browsers | Supported, tested end to end |
-| Firefox | Supported, tested end to end (VP8 video) |
+| Firefox | Supported, tested end to end (VP8 video by default) |
 | Safari 26.4+ | Not yet verified: a fix for joining awaits testing on macOS |
 
 WebTransport is required; there is no WebSocket fallback.

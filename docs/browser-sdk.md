@@ -90,11 +90,13 @@ await room.switchActiveDevice("audiooutput", speakerId);       // Chromium and F
 await room.localParticipant.setCameraResolution("1080p"); // largest layer sent; applies live
 await room.setVideoQuality("low");                         // every remote video at its smallest layer; undefined = by size
 room.getStats();                                           // { sendBitrate, receiveBitrate, sendLimited, sendTarget }, bits/s
-localVideoTrack.sending();                                 // per layer sent: rendition, width, height, bitrate,
-                                                           //   targetBitrate, framerate, limited, sendDelayMs, droppedFrames
+localVideoTrack.sending();                                 // per layer and codec sent: rendition, trackName, codec, hardware,
+                                                           //   width, height, bitrate, targetBitrate, framerate, limited,
+                                                           //   sendDelayMs, droppedFrames
 localVideoTrack.suspended();                               // layers paused because the uplink can't carry them
 room.on("sendLimitedChanged", (limited) => …);
-remoteVideoTrack.bitrate;                                  // also width, height; publication.currentRendition
+remoteVideoTrack.bitrate;                                  // also width, height, codec, softwareDecoding;
+                                                           //   publication.currentRendition, currentTrackName
 remoteVideoTrack.latencyMs;                                // capture to arrival of the latest frame (also on audio)
 remoteAudioTrack.channels;                                 // 2 for stereo, e.g. from the RTMP ingress
 ```
@@ -102,6 +104,41 @@ remoteAudioTrack.channels;                                 // 2 for stereo, e.g.
 `latencyMs` subtracts the publisher's capture timestamp from this browser's clock, so it is only as accurate as the two clocks agree (NTP-synced machines: usually within tens of ms). For an RTMP ingress stream it counts from the ingress, and for rewound playback it is how far behind live the picture is. With stats shown (`VideoStatsContext`), each remote tile adds it, as the median of recent frames, after the bitrate, and in a `data-latency` attribute.
 
 `high`, `medium` and `low` pick the largest, middle and smallest of however many layers a track has: three for a browser's camera, any number from the [RTMP ingress](https://github.com/MoQ-it/moqit-ingress).
+
+### Video codecs
+
+Video can be sent in H.264, H.265, VP8, VP9 or AV1, and the codec can be changed live. Each layer is published in up to four codecs: the preferred one first, plus alternatives. Each codec is its own MoQ track (`camera-h.av1`, `camera-h.avc`). A layer is encoded in a codec only while someone receives it in that codec, so alternatives cost nothing unless a receiver needs them.
+
+```ts
+const room = new Room({ videoCodec: "auto" });             // the default; or "h264", "h265", "vp8", "vp9", "av1"
+await room.localParticipant.videoCodecs();                 // [{ codec, encode, hardware, decode, allowed, failed }]
+await room.localParticipant.setVideoCodec("av1");          // live; rejects a codec this device can't encode
+room.localParticipant.videoCodec;                          // "av1": the codec camera (else screen) video is sent in first
+room.on("videoCodecFallback", (codec, reason) => …);       // a codec failed here; video moved to the others
+room.on("trackUnsupported", (pub, participant, unsupported) => …); // no codec of a remote video decodes here
+room.videoCodecs;                                          // the codecs the room allows; [] = all
+```
+
+**Choosing what to send.**
+- Each codec is probed with `VideoEncoder.isConfigSupported`, at every layer's size, first asking for hardware acceleration and then without.
+- `auto` ranks hardware encoders first, by efficiency: AV1, H.265, VP9, H.264.
+- Software encoders come next, cheapest first: H.264, VP8, VP9, AV1. Firefox's H.264 encoder holds frames for over a second, so Firefox puts VP8 first and H.264 last.
+- A codec chosen with `setVideoCodec` leads the list. H.264 or VP8 is always among the alternatives when it can be encoded, as every browser decodes them.
+- Codec strings carry a level that fits the largest layer, e.g. `av01.0.08M.08` for 1080p. H.264 and H.265 keep their parameter sets in-band (Annex B).
+
+**Receiving.** A subscriber takes the first codec of the layer that it can decode, checked with `VideoDecoder.isConfigSupported`. Taking the publisher's first choice whenever possible spares it a second encode. A codec switch reuses the make-before-break layer switch, so the picture freezes only until the new codec's keyframe arrives.
+
+**Fallback.**
+- **Encoder side:** a codec whose encoder fails three times within 30 s is dropped on that device, and video moves to the remaining codecs. In `auto` mode, so is one that drops over 30 % of frames over 5 s because the encoder can't keep up. `videoCodecFallback` reports either case.
+- **Decoder side:** a video whose decoder keeps failing in a codec (after the software retry) moves to the next codec.
+- **Nothing decodable:** if no codec decodes, the publication's `unsupported` is set and the tile says so.
+
+**Room policy.** A room created with `video_codecs`, or changed with `SetRoomVideoCodecs` (see [server](server.md)), allows only those codecs. Publishers move off any others live, and the server refuses tracks that announce them.
+
+**Tested:**
+- Live switching through every codec the browser encodes, in Chrome and Firefox on Linux.
+- A receiver that can't decode a codec, simulated.
+- H.265 depends on a hardware encoder (Chrome on Windows, macOS, or Linux with VA-API) and was not available in those tests, so it is **unverified**, as is all of Safari.
 
 ### Fitting the uplink
 
@@ -133,15 +170,15 @@ await room.localParticipant.setProcessor(TrackSource.CAMERA, blur); // kept when
 
 **Publishing:**
 - **Capture:** `MediaStreamTrackProcessor` in Chromium; `requestVideoFrameCallback` plus `new VideoFrame(video)` in Firefox and Safari.
-- **Video codec:** H.264 by default, with the level raised to fit the largest rendition; VP8 in Firefox, whose H.264 encoder adds over a second of delay.
-- **Simulcast on demand:** each rendition (`camera-h`, `-m`, `-l`; `screen-h`, `-l`) is encoded only while someone subscribes to it.
+- **Video codec:** the most efficient one this device encodes well, with alternatives (see [Video codecs](#video-codecs)).
+- **Simulcast on demand:** each rendition (`camera-h`, `-m`, `-l`; `screen-h`, `-l`) in each codec (`camera-h.av1`) is encoded only while someone subscribes to it.
 - **Groups and keyframes:** each GOP is a MoQ Group; NEW_GROUP_REQUEST forces a keyframe.
 - **Audio:** an AudioWorklet slices it into 20 ms Opus frames, one Group per frame, with a LOC audio-level property.
 
 **Subscribing:**
 - **Joining a track:** subscribers start at the current group and ask for a fresh keyframe. Switching rendition drops the old one once the new one delivers.
 - **Video rendering:** `MediaStreamTrackGenerator` into a `<video>` element where available, canvas elsewhere.
-- **Decoder failures:** a video decoder that fails (hardware decoders can, mid-stream) is replaced, and the video resumes at a fresh keyframe. A second failure within 30 s switches that track to software decoding; after five, it stops retrying.
+- **Decoder failures:** a video decoder that fails (hardware decoders can, mid-stream) is replaced, and the video resumes at a fresh keyframe. A second failure within 30 s switches that track to software decoding. After five, it moves to another of the publisher's codecs, or stops if there is none.
 - **Audio playout:** a jitter-buffer AudioWorklet (60 ms target, 200 ms cap) mixed into one `<audio>` element. Stereo tracks (`TrackInfo.channels` 2) play in stereo, mono on both channels.
 
 **Quality:**
