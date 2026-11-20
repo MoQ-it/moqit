@@ -5,6 +5,7 @@ import {
   type Participant,
   type RemoteParticipant,
   type RemoteVideoTrack,
+  MAIN_CAMERA,
   type Room,
   TrackSource,
   videoCodecName,
@@ -49,7 +50,7 @@ export function formatBitrate(bps: number): string {
  * Remote: the size, layer, bitrate and latency received. Local: each layer
  * being sent, with its size and bitrate (a layer nobody watches is not sent).
  */
-function VideoStats({ participant, source, track }: { participant: Participant; source: TrackSource; track: LocalVideoTrack | RemoteVideoTrack }) {
+function VideoStats({ participant, source, trackName, track }: { participant: Participant; source: TrackSource; trackName?: string; track: LocalVideoTrack | RemoteVideoTrack }) {
   const [lines, setLines] = useState<{
     text: string; rendition?: string; track?: string; codec?: string; resolution?: string; bitrate: number; limited?: boolean; target?: number; latency?: number;
   }[]>([]);
@@ -78,7 +79,8 @@ function VideoStats({ participant, source, track }: { participant: Participant; 
       }
       const r = track as RemoteVideoTrack;
       if (!r.width || r.unsupported) return [];
-      const layer = (participant as RemoteParticipant).getTrackPublication(source)?.currentRendition;
+      const rp = participant as RemoteParticipant;
+      const layer = (trackName ? rp.getTrackPublicationByName(trackName) : rp.getTrackPublication(source))?.currentRendition;
       const latency = latencies.length ? median(latencies) : undefined;
       const codec = `${videoCodecName(r.codec)}${r.softwareDecoding ? " (sw)" : ""}`;
       return [{
@@ -144,10 +146,15 @@ function setMutedForMe(p: RemoteParticipant, muted: boolean) {
  * click) asks to pin it to the stage, or to unpin it when pinned. A remote
  * camera tile has a button muting that participant for this client only.
  */
-export function ParticipantTile({ participant, source = TrackSource.CAMERA, onPin, pinned = false }: {
-  participant: Participant; source?: TrackSource; onPin?: () => void; pinned?: boolean;
+/**
+ * A participant's camera (or, with source, screen) with their name. With
+ * trackName it shows that camera, e.g. an extra one ("camera-desk"),
+ * labelled with its name.
+ */
+export function ParticipantTile({ participant, source = TrackSource.CAMERA, trackName, onPin, pinned = false }: {
+  participant: Participant; source?: TrackSource; trackName?: string; onPin?: () => void; pinned?: boolean;
 }) {
-  const video = useVideoTrack(participant, source);
+  const video = useVideoTrack(participant, source, trackName);
   const speaking = useIsSpeaking(participant);
   useRoomUpdates();
   const name = participant.name || participant.identity;
@@ -155,38 +162,41 @@ export function ParticipantTile({ participant, source = TrackSource.CAMERA, onPi
     ? !(participant as LocalParticipant).getTrack(TrackSource.MICROPHONE) || (participant as LocalParticipant).getTrack(TrackSource.MICROPHONE)!.muted
     : !(participant as RemoteParticipant).getTrackPublication(TrackSource.MICROPHONE) || (participant as RemoteParticipant).getTrackPublication(TrackSource.MICROPHONE)!.muted;
   const videoMuted = participant.isLocal
-    ? (participant as LocalParticipant).getTrack(source)?.muted
-    : (participant as RemoteParticipant).getTrackPublication(source)?.muted;
+    ? (trackName ? (participant as LocalParticipant).getTrackByName(trackName) : (participant as LocalParticipant).getTrack(source))?.muted
+    : (trackName ? (participant as RemoteParticipant).getTrackPublicationByName(trackName) : (participant as RemoteParticipant).getTrackPublication(source))?.muted;
+  // An extra camera, "camera-desk", is labelled "desk".
+  const extra = trackName && trackName !== MAIN_CAMERA && source === TrackSource.CAMERA ? trackName.slice(MAIN_CAMERA.length + 1) : undefined;
   const isScreen = source === TrackSource.SCREEN;
   const showStats = useContext(VideoStatsContext);
   const remote = participant.isLocal ? undefined : (participant as RemoteParticipant);
   const mutedForMe = remote?.getVolume() === 0;
-  const pub = remote?.getTrackPublication(source);
+  const pub = trackName ? remote?.getTrackPublicationByName(trackName) : remote?.getTrackPublication(source);
   const undecodable = pub?.unsupported
     ? [...new Set((pub.info.renditions[0]?.encodings.map((e) => e.codec) ?? [pub.info.codec]).map(videoCodecName))].join(", ")
     : undefined;
   return (
-    <div className={`moqit-tile${speaking && !isScreen ? " speaking" : ""}${isScreen ? " screen" : ""}${pinned ? " pinned" : ""}`} data-identity={participant.identity} data-source={isScreen ? "screen" : "camera"}
+    <div className={`moqit-tile${speaking && !isScreen && !extra ? " speaking" : ""}${isScreen ? " screen" : ""}${extra ? " extra-camera" : ""}${pinned ? " pinned" : ""}`}
+      data-identity={participant.identity} data-source={isScreen ? "screen" : "camera"} data-track={trackName ?? (isScreen ? "screen" : MAIN_CAMERA)}
       onDoubleClick={onPin}>
       {video && !videoMuted ? (
         <VideoView track={video} mirror={participant.isLocal && !isScreen} />
       ) : (
         <div className="moqit-avatar">{initials(name)}</div>
       )}
-      {showStats && video && !videoMuted && <VideoStats participant={participant} source={source} track={video} />}
+      {showStats && video && !videoMuted && <VideoStats participant={participant} source={source} trackName={trackName} track={video} />}
       {undecodable && !videoMuted && <div className="moqit-unsupported" role="status">This browser can't decode this video ({undecodable})</div>}
       <div className="moqit-name">
-        {!isScreen && micMuted && <span className="moqit-muted" title="microphone off">🔇</span>}
-        {isScreen ? `${name} (screen)` : name}
+        {!isScreen && !extra && micMuted && <span className="moqit-muted" title="microphone off">🔇</span>}
+        {isScreen ? `${name} (screen)` : extra ? `${name} · ${extra}` : name}
         {participant.isLocal && !isScreen && " (you)"}
       </div>
       <div className="moqit-tile-actions">
         {onPin && (
-          <button className="moqit-pin" onClick={onPin} aria-label={`${pinned ? "unpin" : "pin"} ${name}${isScreen ? " (screen)" : ""}`} title={pinned ? "Unpin" : "Pin to the stage"}>
+          <button className="moqit-pin" onClick={onPin} aria-label={`${pinned ? "unpin" : "pin"} ${name}${isScreen ? " (screen)" : extra ? ` (${extra})` : ""}`} title={pinned ? "Unpin" : "Pin to the stage"}>
             {pinned ? "✕" : "⤢"}
           </button>
         )}
-        {remote && !isScreen && (
+        {remote && !isScreen && !extra && (
           <button className={`moqit-mute-for-me${mutedForMe ? " on" : ""}`} onClick={() => setMutedForMe(remote, !mutedForMe)} onDoubleClick={(e) => e.stopPropagation()}
             aria-label={`${mutedForMe ? "unmute" : "mute"} ${name} for me`} aria-pressed={mutedForMe} title={mutedForMe ? "Unmute for me" : "Mute for me (others still hear them)"}>
             {mutedForMe ? "🔕" : "🔈"}
@@ -202,8 +212,14 @@ export function ParticipantTile({ participant, source = TrackSource.CAMERA, onPi
  * as they can be while all fit, the last row centred. Tiles are offered
  * for pinning with onPin.
  */
-export function GridLayout({ onPin }: { onPin?: (participant: Participant) => void } = {}) {
+export function GridLayout({ onPin }: { onPin?: (participant: Participant, trackName?: string) => void } = {}) {
   const participants = useParticipants();
+  useRoomUpdates();
+  // Every participant's main camera tile, then a tile per extra camera.
+  const tiles = participants.flatMap((p) => [
+    { p, trackName: undefined as string | undefined },
+    ...cameraNames(p).filter((n) => n !== MAIN_CAMERA).map((n) => ({ p, trackName: n as string | undefined })),
+  ]);
   const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0, gap: 10 });
   useEffect(() => {
@@ -213,10 +229,13 @@ export function GridLayout({ onPin }: { onPin?: (participant: Participant) => vo
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const { cols, tileWidth } = gridFit(size.width, size.height, participants.length, { gap: size.gap });
+  const { cols, tileWidth } = gridFit(size.width, size.height, tiles.length, { gap: size.gap });
   return (
     <div ref={ref} className="moqit-grid" data-cols={cols} style={{ "--moqit-tile-width": `${tileWidth}px` } as CSSProperties}>
-      {participants.map((p) => <ParticipantTile key={p.identity} participant={p} onPin={onPin && (() => onPin(p))} />)}
+      {tiles.map(({ p, trackName }) => (
+        <ParticipantTile key={trackName ? `${p.identity}/${trackName}` : p.identity} participant={p} trackName={trackName}
+          onPin={onPin && (() => onPin(p, trackName))} />
+      ))}
     </div>
   );
 }
@@ -228,10 +247,12 @@ export function GridLayout({ onPin }: { onPin?: (participant: Participant) => vo
  * With onPin, strip tiles can be pinned; with onUnpin, the stage shows it
  * is pinned and offers to unpin. The stage can go full screen.
  */
-export function FocusLayout({ presenter, source = TrackSource.SCREEN, onPin, onUnpin }: {
-  presenter: Participant; source?: TrackSource; onPin?: (participant: Participant, source: TrackSource) => void; onUnpin?: () => void;
+export function FocusLayout({ presenter, source = TrackSource.SCREEN, trackName, onPin, onUnpin }: {
+  presenter: Participant; source?: TrackSource; trackName?: string;
+  onPin?: (participant: Participant, source: TrackSource, trackName?: string) => void; onUnpin?: () => void;
 }) {
   const participants = useParticipants();
+  useRoomUpdates();
   const shares = useScreenShares();
   const stage = useRef<HTMLDivElement>(null);
   const [full, setFull] = useState(false);
@@ -241,8 +262,12 @@ export function FocusLayout({ presenter, source = TrackSource.SCREEN, onPin, onU
     return () => document.removeEventListener("fullscreenchange", on);
   }, []);
   const card = presenter.isLocal && source === TrackSource.SCREEN;
-  const onStage = (p: Participant, s: TrackSource) => p.identity === presenter.identity && s === source;
-  const cameras = participants.filter((p) => !onStage(p, TrackSource.CAMERA));
+  const stageTrack = source === TrackSource.CAMERA ? (trackName ?? MAIN_CAMERA) : undefined;
+  const onStage = (p: Participant, s: TrackSource, t?: string) =>
+    p.identity === presenter.identity && s === source && (s !== TrackSource.CAMERA || (t ?? MAIN_CAMERA) === stageTrack);
+  // Every camera, main and extra, not on the stage.
+  const cameras = participants.flatMap((p) => [MAIN_CAMERA, ...cameraNames(p).filter((n) => n !== MAIN_CAMERA)]
+    .filter((n) => !onStage(p, TrackSource.CAMERA, n)).map((n) => ({ p, trackName: n === MAIN_CAMERA ? undefined : n })));
   // Your own screen is never shown back to you.
   const screens = shares.filter((p) => !p.isLocal && !onStage(p, TrackSource.SCREEN));
   const toggleFull = () => {
@@ -252,7 +277,7 @@ export function FocusLayout({ presenter, source = TrackSource.SCREEN, onPin, onU
   return (
     <div className="moqit-focus">
       <div ref={stage} className="moqit-stage" data-presenter={presenter.identity} data-source={source === TrackSource.SCREEN ? "screen" : "camera"}>
-        {card ? <PresentingCard /> : <ParticipantTile participant={presenter} source={source} onPin={onUnpin} pinned={!!onUnpin} />}
+        {card ? <PresentingCard /> : <ParticipantTile participant={presenter} source={source} trackName={trackName} onPin={onUnpin} pinned={!!onUnpin} />}
         {!card && document.fullscreenEnabled && (
           <button className="moqit-fullscreen" onClick={toggleFull} aria-label={full ? "exit full screen" : "full screen"} title={full ? "Exit full screen" : "Full screen"}>
             {full ? "⤡" : "⛶"}
@@ -261,7 +286,9 @@ export function FocusLayout({ presenter, source = TrackSource.SCREEN, onPin, onU
       </div>
       <div className="moqit-strip">
         {screens.map((p) => <ParticipantTile key={`${p.identity}/screen`} participant={p} source={TrackSource.SCREEN} onPin={onPin && (() => onPin(p, TrackSource.SCREEN))} />)}
-        {cameras.map((p) => <ParticipantTile key={p.identity} participant={p} onPin={onPin && (() => onPin(p, TrackSource.CAMERA))} />)}
+        {cameras.map(({ p, trackName: t }) => (
+          <ParticipantTile key={t ? `${p.identity}/${t}` : p.identity} participant={p} trackName={t} onPin={onPin && (() => onPin(p, TrackSource.CAMERA, t))} />
+        ))}
       </div>
     </div>
   );
@@ -271,6 +298,8 @@ export function FocusLayout({ presenter, source = TrackSource.SCREEN, onPin, onU
 export interface Pin {
   identity: string;
   source: TrackSource;
+  /** An extra camera's track name; undefined for the main camera or a screen. */
+  trackName?: string;
 }
 
 /**
@@ -282,15 +311,18 @@ export function ConferenceLayout() {
   const participants = useParticipants();
   const shares = useScreenShares();
   const [pin, setPin] = useState<Pin>();
-  const pinned = pin && (pin.source === TrackSource.SCREEN ? shares : participants).find((p) => p.identity === pin.identity);
+  useRoomUpdates();
+  let pinned = pin && (pin.source === TrackSource.SCREEN ? shares : participants).find((p) => p.identity === pin.identity);
+  // A pinned extra camera that is no longer published ends the pin too.
+  if (pinned && pin?.trackName && !cameraNames(pinned).includes(pin.trackName)) pinned = undefined;
   useEffect(() => {
     if (pin && !pinned) setPin(undefined);
   }, [pin, pinned]);
-  const onPin = (p: Participant, source: TrackSource) => setPin({ identity: p.identity, source });
-  if (pin && pinned) return <FocusLayout presenter={pinned} source={pin.source} onPin={onPin} onUnpin={() => setPin(undefined)} />;
+  const onPin = (p: Participant, source: TrackSource, trackName?: string) => setPin({ identity: p.identity, source, trackName });
+  if (pin && pinned) return <FocusLayout presenter={pinned} source={pin.source} trackName={pin.trackName} onPin={onPin} onUnpin={() => setPin(undefined)} />;
   const presenter = shares.find((p) => !p.isLocal) ?? shares[0];
   if (presenter) return <FocusLayout presenter={presenter} onPin={onPin} />;
-  return <GridLayout onPin={(p) => onPin(p, TrackSource.CAMERA)} />;
+  return <GridLayout onPin={(p, trackName) => onPin(p, TrackSource.CAMERA, trackName)} />;
 }
 
 /** Shown to the presenter in place of their own screen. */
@@ -521,4 +553,9 @@ export function Scrubber() {
       </button>
     </div>
   );
+}
+
+// A participant's published cameras' track names, the main one first.
+function cameraNames(p: Participant): string[] {
+  return p.isLocal ? (p as LocalParticipant).cameraTrackNames() : (p as RemoteParticipant).cameraTrackNames();
 }

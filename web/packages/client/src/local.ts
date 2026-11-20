@@ -227,12 +227,15 @@ export class LocalVideoTrack extends LocalTrackBase {
   /**
    * @param codecs the codecs to offer, preferred first, or one WebCodecs
    * codec string (e.g. "avc1.42e01f").
+   * @param name the track's name, by default "camera" or "screen"; an extra
+   * camera is "camera-<name>", with renditions named after it.
    */
   constructor(
     track: MediaStreamTrack,
     readonly source: TrackSource,
     codecs: string | readonly VideoCodec[],
     specs: RenditionSpec[],
+    private readonly name_?: string,
   ) {
     super(track);
     this.specs_ = specs;
@@ -311,7 +314,7 @@ export class LocalVideoTrack extends LocalTrackBase {
   }
 
   get name(): string {
-    return this.source === TrackSource.SCREEN ? "screen" : "camera";
+    return this.name_ ?? (this.source === TrackSource.SCREEN ? "screen" : "camera");
   }
 
   trackNames(): string[] {

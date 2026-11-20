@@ -4,7 +4,7 @@
 #   cp .env.example .env       # set MEET_DOMAIN and MOQIT_API_SECRET
 #   docker compose up -d --build
 #
-# Open TCP 80 and 443 and UDP 4443.
+# Open TCP 80 and 443, and UDP and TCP 4443.
 
 name: moqit-meet
 
@@ -43,6 +43,7 @@ services:
       MOQIT_KEYS: ${MOQIT_API_KEY:-meet}:${MOQIT_API_SECRET:?set MOQIT_API_SECRET in .env}
     ports:
       - "${MOQ_PORT:-4443}:4443/udp"
+      - "${MOQ_PORT:-4443}:4443/tcp" # WebSocket fallback (Safari, UDP-blocking networks)
     volumes:
       - caddy-data:/caddy:ro
     # Caddy's private keys are readable by root only: the node runs as root,

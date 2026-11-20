@@ -1,5 +1,6 @@
 // Package testclient is a minimal moqit participant speaking raw MoQ over
-// QUIC, for tests. It keeps a view of the room as an SDK would.
+// QUIC, or over WebSocket, for tests. It keeps a view of the room as an SDK
+// would.
 package testclient
 
 import (
@@ -7,6 +8,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +18,9 @@ import (
 	moqitv1 "github.com/MoQ-it/moqit/proto/moqit/v1"
 	"github.com/MoQ-it/moqt"
 	"github.com/MoQ-it/moqt/transport/rawquic"
+	"github.com/MoQ-it/moqt/transport/ws"
 	v22 "github.com/MoQ-it/moqt/wire/v22"
+	"github.com/coder/websocket"
 	"github.com/quic-go/quic-go"
 	"google.golang.org/protobuf/proto"
 )
@@ -79,13 +83,40 @@ type VideoWriter struct {
 	W    *moqt.TrackWriter
 }
 
-// Dial connects to a node with a token, without joining yet.
+// Dial connects to a node with a token, without joining yet: over raw QUIC
+// to a host:port, or over WebSocket to a wss:// URL.
 func Dial(t testing.TB, addr, identity, token string) (*Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	c := &Client{T: t, Identity: identity, state: map[string]*moqitv1.ParticipantInfo{}, changed: make(chan struct{}, 1),
 		Inbox: make(chan *moqitv1.InboxMessage, 16), signal: make(chan *moqt.TrackWriter, 1), Mic: make(chan *moqt.TrackWriter, 4),
 		Video: make(chan VideoWriter, 8)}
+	var conn moqt.Conn
+	if strings.HasPrefix(addr, "wss://") {
+		wc, err := ws.Dial(ctx, addr, &websocket.DialOptions{HTTPClient: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}})
+		if err != nil {
+			return nil, err
+		}
+		c.Vanish = func() {}
+		conn = wc
+	} else {
+		qc, err := dialQUIC(ctx, t, c, addr)
+		if err != nil {
+			return nil, err
+		}
+		conn = rawquic.New(qc)
+	}
+	opt := v22.Token{AliasType: v22.AliasUseValue, Value: []byte(token)}
+	sess, err := moqt.NewSession(ctx, conn, moqt.Client, moqt.Config{Handler: c, SetupOptions: v22.KeyValues{{Type: v22.OptAuthorizationToken, Bytes: opt.Append(nil)}}})
+	if err != nil {
+		return nil, err
+	}
+	c.Sess = sess
+	t.Cleanup(func() { sess.Close() })
+	return c, nil
+}
+
+func dialQUIC(ctx context.Context, t testing.TB, c *Client, addr string) (*quic.Conn, error) {
 	// Our own socket, so Vanish can cut it.
 	udp, err := net.ListenUDP("udp", nil)
 	if err != nil {
@@ -102,14 +133,7 @@ func Dial(t testing.TB, addr, identity, token string) (*Client, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opt := v22.Token{AliasType: v22.AliasUseValue, Value: []byte(token)}
-	sess, err := moqt.NewSession(ctx, rawquic.New(qc), moqt.Client, moqt.Config{Handler: c, SetupOptions: v22.KeyValues{{Type: v22.OptAuthorizationToken, Bytes: opt.Append(nil)}}})
-	if err != nil {
-		return nil, err
-	}
-	c.Sess = sess
-	t.Cleanup(func() { sess.Close() })
-	return c, nil
+	return qc, nil
 }
 
 // Join connects and joins a room like the SDK: publish the participant

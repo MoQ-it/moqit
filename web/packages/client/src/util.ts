@@ -125,6 +125,26 @@ export const CameraPresets: Record<VideoResolution, { width: number; height: num
 
 export const CameraRenditions: RenditionSpec[] = CameraPresets["720p"].renditions;
 
+/** The track name of the main camera; extra cameras are "camera-<name>". */
+export const MAIN_CAMERA = "camera";
+
+/**
+ * A camera track's renditions at a send resolution: "camera-h", "camera-m",
+ * ... for the main camera, "camera-desk-h", ... for a camera named "camera-desk".
+ */
+export function cameraRenditions(resolution: VideoResolution, trackName = MAIN_CAMERA): RenditionSpec[] {
+  const specs = CameraPresets[resolution].renditions;
+  if (trackName === MAIN_CAMERA) return specs;
+  return specs.map((s) => ({ ...s, trackName: trackName + s.trackName.slice(MAIN_CAMERA.length) }));
+}
+
+/** The track name for a camera: the main one without a name, else "camera-<name>" (1-16 of a-z, 0-9). */
+export function cameraTrackName(name?: string): string {
+  if (name === undefined || name === "") return MAIN_CAMERA;
+  if (!/^[a-z0-9]{1,16}$/.test(name)) throw new Error(`invalid camera name ${JSON.stringify(name)}: use 1-16 of a-z, 0-9`);
+  return `${MAIN_CAMERA}-${name}`;
+}
+
 export const ScreenRenditions: RenditionSpec[] = [
   { trackName: "screen-h", width: 1920, height: 1080, bitrate: 2_500_000, framerate: 15 },
   { trackName: "screen-l", width: 960, height: 540, bitrate: 600_000, framerate: 5 },

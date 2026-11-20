@@ -536,6 +536,35 @@ func TestVideoEncodingsAndCodecPolicy(t *testing.T) {
 	})
 }
 
+// A participant can publish more than one camera: each is its own track,
+// named "camera-<name>" with renditions after it, beside the main "camera".
+func TestExtraCameras(t *testing.T) {
+	n := newNode(t, room.Config{})
+	alice := join(t, n, "alice", auth.RoomGrant{})
+	alice.waitState("alice", present("alice"))
+	cam := func(name string, renditions ...string) *moqitv1.TrackInfo {
+		t := &moqitv1.TrackInfo{Name: name, Kind: moqitv1.TrackKind_TRACK_KIND_VIDEO, Source: moqitv1.TrackSource_TRACK_SOURCE_CAMERA, Codec: "vp8"}
+		for _, r := range renditions {
+			t.Renditions = append(t.Renditions, &moqitv1.Rendition{TrackName: r, Width: 640, Height: 360})
+		}
+		return t
+	}
+	set := func(tracks ...*moqitv1.TrackInfo) *moqitv1.ClientSignal {
+		return &moqitv1.ClientSignal{Signal: &moqitv1.ClientSignal_SetTracks{SetTracks: &moqitv1.SetTracks{Tracks: tracks}}}
+	}
+	if r := alice.send(set(cam("camera", "camera-h.vp8", "camera-l.vp8"), cam("camera-desk", "camera-desk-h.vp8", "camera-desk-l.vp8"))); r.Result != moqitv1.RequestResult_REQUEST_RESULT_OK {
+		t.Fatalf("two cameras: %v", r)
+	}
+	alice.waitState("both cameras announced", func(s map[string]*moqitv1.ParticipantInfo) bool {
+		ts := s["alice"].GetTracks()
+		return len(ts) == 2 && ts[0].Sid != ts[1].Sid && ts[1].Name == "camera-desk"
+	})
+	// Renditions must not collide across cameras.
+	if r := alice.send(set(cam("camera", "camera-h.vp8"), cam("camera-desk", "camera-h.vp8"))); r.Result != moqitv1.RequestResult_REQUEST_RESULT_NOT_ALLOWED {
+		t.Errorf("clashing renditions: %v", r)
+	}
+}
+
 func TestActiveSpeakers(t *testing.T) {
 	n := newNode(t, room.Config{})
 	alice := testclient.Join(t, n.addr, "r1", "alice", token(t, "alice", auth.RoomGrant{}))

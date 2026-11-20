@@ -59,20 +59,33 @@ async function main() {
   try {
     const cfg = await (await fetch("/config")).json();
     const hashOf = (hex: string) => ({ serverCertificateHashes: [Uint8Array.from(hex.match(/../g)!.map((h) => parseInt(h, 16)))] });
+    // Bob and Carol may be sent over another transport; Alice keeps the SDK's choice.
+    const other = (hex: string) => ({ ...hashOf(hex), transport: cfg.transport || undefined });
+    const checkTransport = (who: string, room: Room) => {
+      if (cfg.transport && room.transport !== cfg.transport) throw new Error(`${who} is on ${room.transport}, not ${cfg.transport}`);
+    };
 
     // In the cluster variant Alice and Bob are on different nodes.
     const alice = new Room();
     const bob = new Room({ videoQuality: "high" });
     await alice.connect(cfg.aliceUrl, cfg.aliceToken, hashOf(cfg.aliceCertHash));
-    step(`alice connected to ${cfg.aliceUrl}`);
-    await bob.connect(cfg.bobUrl, cfg.bobToken, hashOf(cfg.bobCertHash));
-    step(`bob connected to ${cfg.bobUrl}`);
+    step(`alice connected to ${cfg.aliceUrl} over ${alice.transport}`);
+    await bob.connect(cfg.bobUrl, cfg.bobToken, other(cfg.bobCertHash));
+    checkTransport("bob", bob);
+    step(`bob connected to ${cfg.bobUrl} over ${bob.transport}`);
     await until("each sees the other", () => alice.remoteParticipants.has("bob") && bob.remoteParticipants.has("alice"));
 
     let video: RemoteVideoTrack | undefined;
     let audio: RemoteAudioTrack | undefined;
+    let deskVideo: RemoteVideoTrack | undefined;
     bob.on("trackSubscribed", (t, pub) => {
-      if (pub.source === TrackSource.CAMERA) {
+      if (pub.source === TrackSource.CAMERA && pub.name === "camera-desk") {
+        deskVideo = t as RemoteVideoTrack;
+        // In view: video outside it is paused by adaptive stream.
+        const el = deskVideo.attach() as HTMLElement;
+        Object.assign(el.style, { position: "fixed", top: "0", left: "0", width: "320px" });
+        document.body.append(el);
+      } else if (pub.source === TrackSource.CAMERA) {
         video = t as RemoteVideoTrack;
         document.body.append(video.attach());
       }
@@ -115,8 +128,9 @@ async function main() {
       if (pub.source === TrackSource.CAMERA) carolVideo = t as RemoteVideoTrack;
       if (pub.source === TrackSource.MICROPHONE) carolAudio = t as RemoteAudioTrack;
     });
-    await carol.connect(cfg.carolUrl, cfg.carolToken, hashOf(cfg.carolCertHash));
-    step(`carol watching through ${cfg.carolUrl}`);
+    await carol.connect(cfg.carolUrl, cfg.carolToken, other(cfg.carolCertHash));
+    checkTransport("carol", carol);
+    step(`carol watching through ${cfg.carolUrl} over ${carol.transport}`);
     await until("carol decodes 30 video frames", () => (carolVideo?.framesDecoded ?? 0) >= 30);
     await until("carol decodes 50 audio frames", () => (carolAudio?.framesDecoded ?? 0) >= 50);
     await until("alice and bob count one viewer", () => alice.numViewers === 1 && bob.numViewers === 1);
@@ -269,6 +283,29 @@ async function main() {
     await until(`a failing ${failCodec} decoder moves bob to another codec`, () => codecOf(video!.codec) !== failCodec && video!.framesDecoded > mark + 30, 20000);
     result.codecFallback = `${failCodec} → ${codecOf(video!.codec)}`;
     failCodec = undefined;
+
+    // A second camera: Alice adds a desk view from another device, beside
+    // her main camera. Bob receives both; the main one stays "the" camera.
+    const cams = await Room.getLocalDevices("videoinput");
+    const deskDevice = cams.length > 1 ? cams[1].deviceId : undefined; // Firefox's fake camera opens twice
+    await alice.localParticipant.setCameraEnabled(true, undefined, { name: "desk", deviceId: deskDevice });
+    const bobsAlice = bob.remoteParticipants.get("alice")!;
+    await until("bob sees alice's two cameras", () => bobsAlice.cameraTrackNames().join() === "camera,camera-desk");
+    await until("bob decodes 30 desk frames", () => (deskVideo?.framesDecoded ?? 0) >= 30, 20000).catch((e) => {
+      const p = bobsAlice.getTrackPublicationByName("camera-desk");
+      const a = alice.localParticipant.getTrackByName("camera-desk") as { sending?: () => unknown } | undefined;
+      throw new Error(`${e.message}: subscribed ${p?.isSubscribed}, track ${p?.currentTrackName}, codec ${deskVideo?.codec}, ` +
+        `frames ${deskVideo?.framesDecoded}, alice sending ${JSON.stringify(a?.sending?.())}`);
+    });
+    mark = video!.framesDecoded;
+    await until("the main camera keeps going", () => video!.framesDecoded > mark + 30);
+    if (bobsAlice.getTrackPublication(TrackSource.CAMERA)?.name !== "camera") throw new Error("the main camera is not alice's camera");
+    if (!bobsAlice.getTrackPublicationByName("camera-desk")?.info.renditions.every((r) => r.trackName.startsWith("camera-desk-"))) {
+      throw new Error("desk renditions are not named after the desk camera");
+    }
+    result.desk = `${deskVideo!.width}x${deskVideo!.height} from ${deskDevice ? "a second device" : "the same device"}`;
+    await alice.localParticipant.setCameraEnabled(false, undefined, { name: "desk" });
+    await until("the desk camera is gone for bob", () => bobsAlice.cameraTrackNames().join() === "camera");
 
     // Broadcast data, targeted data, metadata.
     const got: string[] = [];

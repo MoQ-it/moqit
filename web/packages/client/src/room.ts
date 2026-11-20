@@ -1,7 +1,7 @@
 // Room, participants and their events.
 
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
-import { type OutgoingSubgroup, RequestError, Session, type SubscribeRequest, type Subscription, type TrackWriter } from "@moq-it/moqt";
+import { type OutgoingSubgroup, RequestError, Session, type SubscribeRequest, type Subscription, type TrackWriter, type TransportKind } from "@moq-it/moqt";
 import {
   type ParticipantInfo,
   ParticipantState,
@@ -24,23 +24,7 @@ import { type CodecSupport, probeVideoCodecs, rankCodecs, type VideoCodec, type 
 import { LocalAudioTrack, type LocalTrack, LocalVideoTrack, type TrackProcessor } from "./local.ts";
 import { allocate, type Feedback, SendController, Suspensions } from "./sendcontrol.ts";
 import { AudioOutput, type RemoteAudioTrack, RemoteTrackPublication, type RemoteTrack } from "./remote.ts";
-import {
-  CameraPresets,
-  eachObject,
-  Emitter,
-  inboxNamespace,
-  jwtClaims,
-  participantNamespace,
-  retryDelay,
-  ScreenRenditions,
-  Serial,
-  serverNamespace,
-  sleep,
-  TrackName,
-  type RenditionSpec,
-  type VideoQuality,
-  type VideoResolution,
-} from "./util.ts";
+import { CameraPresets, eachObject, Emitter, inboxNamespace, jwtClaims, participantNamespace, retryDelay, ScreenRenditions, Serial, serverNamespace, sleep, TrackName, type RenditionSpec, type VideoQuality, type VideoResolution, cameraRenditions, cameraTrackName, MAIN_CAMERA } from "./util.ts";
 
 export const ConnectionState = {
   Disconnected: "disconnected",
@@ -122,8 +106,18 @@ export interface RoomOptions {
 }
 
 export interface ConnectOptions {
-  /** SHA-256 hashes of a development server's self-signed certificate. */
+  /** SHA-256 hashes of a development server's self-signed certificate (WebTransport only). */
   serverCertificateHashes?: Uint8Array[];
+  /**
+   * "auto" (the default) uses WebTransport, and a WebSocket where it is
+   * missing or unreliable (Safari and every iOS browser) or does not
+   * connect within webSocketDelayMs.
+   */
+  transport?: "auto" | TransportKind;
+  /** The node's WebSocket URL; default: the WebTransport URL with wss://. */
+  webSocketUrl?: string;
+  /** How long WebTransport gets before a WebSocket is tried too (default 1000ms). */
+  webSocketDelayMs?: number;
   /** How long each step of joining may take: the handshake, SETUP, and the rest (default 10000ms). */
   timeoutMs?: number;
 }
@@ -217,6 +211,9 @@ export class Room extends Emitter<RoomEvents> {
       this.session = await Session.connect({
         url,
         serverCertificateHashes: opts.serverCertificateHashes,
+        transport: opts.transport,
+        webSocketUrl: opts.webSocketUrl,
+        webSocketDelayMs: opts.webSocketDelayMs,
         authorizationToken: new TextEncoder().encode(token),
         handler: { onSubscribe: (req) => void this.handleSubscribe(req) },
         readyTimeoutMs: timeoutMs,
@@ -260,6 +257,11 @@ export class Room extends Emitter<RoomEvents> {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** The transport carrying the connection, once connected. */
+  get transport(): TransportKind | undefined {
+    return this.session?.transport;
   }
 
   async disconnect(): Promise<void> {
@@ -746,8 +748,20 @@ export class RemoteParticipant extends Participant {
     return (audio.track as RemoteAudioTrack | undefined)?.clock();
   }
 
+  /** The publication of a source; for cameras, the main one ("camera") when it is published. */
   getTrackPublication(source: TrackSource): RemoteTrackPublication | undefined {
-    return [...this.trackPublications.values()].find((p) => p.source === source);
+    const pubs = [...this.trackPublications.values()].filter((p) => p.source === source);
+    return pubs.find((p) => p.name === defaultTrackName(source)) ?? pubs[0];
+  }
+
+  /** A publication by the publisher's track name, e.g. "camera-desk". */
+  getTrackPublicationByName(name: string): RemoteTrackPublication | undefined {
+    return [...this.trackPublications.values()].find((p) => p.name === name);
+  }
+
+  /** The published cameras' track names, the main one first. */
+  cameraTrackNames(): string[] {
+    return sortCameras([...this.trackPublications.values()].filter((p) => p.source === TrackSource.CAMERA).map((p) => p.name));
   }
 
   /**
@@ -775,6 +789,17 @@ export class RemoteParticipant extends Participant {
     this.dataSub?.unsubscribe();
     for (const pub of this.trackPublications.values()) pub.close();
   }
+}
+
+/** Which camera setCameraEnabled acts on, and which device it opens. */
+export interface CameraOptions {
+  /**
+   * An extra camera's name (1-16 of a-z, 0-9), e.g. "desk": published as
+   * the track "camera-desk" next to the main camera. Omit for the main camera.
+   */
+  name?: string;
+  /** The device to open; by default the camera chosen with Room.switchActiveDevice. */
+  deviceId?: string;
 }
 
 export interface DataOptions {
@@ -867,17 +892,34 @@ export class LocalParticipant extends Participant {
     return true;
   }
 
-  /** Captures and sends the camera at the send resolution (setCameraResolution). */
-  async setCameraEnabled(enabled: boolean, constraints: MediaTrackConstraints = this.cameraConstraints()): Promise<LocalVideoTrack | undefined> {
-    if (!enabled) return void (await this.unpublish("camera"));
+  /**
+   * Captures and sends the camera at the send resolution (setCameraResolution).
+   * With options.name it is an extra camera, e.g. a second view of a desk,
+   * published beside the main one; processors (setProcessor) apply to the
+   * main camera only.
+   */
+  async setCameraEnabled(enabled: boolean, constraints: MediaTrackConstraints = this.cameraConstraints(), options: CameraOptions = {}): Promise<LocalVideoTrack | undefined> {
+    const name = cameraTrackName(options.name);
+    if (!enabled) return void (await this.unpublish(name));
     this.checkCanPublish();
-    if (this.tracks.has("camera")) return this.tracks.get("camera") as LocalVideoTrack;
-    const specs = CameraPresets[this.cameraRes].renditions;
+    if (this.tracks.has(name)) return this.tracks.get(name) as LocalVideoTrack;
+    const specs = cameraRenditions(this.cameraRes, name);
     const ranked = await this.rankCodecs(specs);
-    const stream = await this.open("videoinput", constraints);
-    const track = this.newVideoTrack(stream.getVideoTracks()[0], TrackSource.CAMERA, ranked, specs);
-    await this.applyProcessor(track);
+    const stream = await this.open("videoinput", options.deviceId ? { ...constraints, deviceId: { exact: options.deviceId } } : constraints);
+    const track = this.newVideoTrack(stream.getVideoTracks()[0], TrackSource.CAMERA, ranked, specs, name);
+    if (name === MAIN_CAMERA) await this.applyProcessor(track);
     return this.publish(track) as Promise<LocalVideoTrack>;
+  }
+
+  /** The published cameras' track names, the main one first. */
+  cameraTrackNames(): string[] {
+    return this.cameraTracks().map((t) => t.name);
+  }
+
+  /** The published cameras, the main one first. */
+  cameraTracks(): LocalVideoTrack[] {
+    const cams = [...this.tracks.values()].filter((t): t is LocalVideoTrack => t instanceof LocalVideoTrack && t.source === TrackSource.CAMERA);
+    return cams.sort((a, b) => Number(b.name === MAIN_CAMERA) - Number(a.name === MAIN_CAMERA));
   }
 
   async setMicrophoneEnabled(enabled: boolean, constraints: MediaTrackConstraints = MIC_CONSTRAINTS): Promise<LocalAudioTrack | undefined> {
@@ -903,17 +945,19 @@ export class LocalParticipant extends Participant {
    */
   async setCameraResolution(resolution: VideoResolution): Promise<void> {
     this.cameraRes = resolution;
-    const track = this.getTrack(TrackSource.CAMERA) as LocalVideoTrack | undefined;
-    if (!track) return;
+    const cams = this.cameraTracks();
+    if (cams.length === 0) return;
     const { width, height, frameRate } = CameraPresets[resolution];
-    // Best effort: a camera that cannot do the size (or is shared with
-    // another tab at a lower one) keeps its own, and renditions never upscale.
-    await track.capturedTrack.applyConstraints({ width, height, frameRate }).catch((e) => console.warn("moqit: camera resolution", e));
-    const specs = CameraPresets[resolution].renditions;
-    const { codecs, hardware } = await this.rankCodecs(specs);
-    track.setRenditions(specs);
-    track.setCodecs(codecs);
-    track.hardware = hardware;
+    for (const track of cams) {
+      // Best effort: a camera that cannot do the size (or is shared with
+      // another tab at a lower one) keeps its own, and renditions never upscale.
+      await track.capturedTrack.applyConstraints({ width, height, frameRate }).catch((e) => console.warn("moqit: camera resolution", e));
+      const specs = cameraRenditions(resolution, track.name);
+      const { codecs, hardware } = await this.rankCodecs(specs);
+      track.setRenditions(specs);
+      track.setCodecs(codecs);
+      track.hardware = hardware;
+    }
     await this.syncTracks();
   }
 
@@ -987,9 +1031,9 @@ export class LocalParticipant extends Participant {
   }
 
   private newVideoTrack(
-    track: MediaStreamTrack, source: TrackSource, { codecs, hardware }: { codecs: VideoCodec[]; hardware: Set<VideoCodec> }, specs: RenditionSpec[],
+    track: MediaStreamTrack, source: TrackSource, { codecs, hardware }: { codecs: VideoCodec[]; hardware: Set<VideoCodec> }, specs: RenditionSpec[], name?: string,
   ): LocalVideoTrack {
-    const t = new LocalVideoTrack(track, source, codecs, specs);
+    const t = new LocalVideoTrack(track, source, codecs, specs, name);
     t.hardware = hardware;
     t.onCodecFailure = (codec, reason) => this.codecFailed(codec, reason);
     return t;
@@ -1191,14 +1235,40 @@ export class LocalParticipant extends Participant {
     await this.room.writeData(create(DataPacketSchema, { topic, payload }), opts.reliable ?? true);
   }
 
+  /** The track of a source; for cameras, the main one ("camera") when it is published. */
   getTrack(source: TrackSource): LocalTrack | undefined {
-    return [...this.tracks.values()].find((t) => t.source === source);
+    const tracks = [...this.tracks.values()].filter((t) => t.source === source);
+    return tracks.find((t) => t.name === defaultTrackName(source)) ?? tracks[0];
+  }
+
+  /** A published track by name, e.g. "camera-desk". */
+  getTrackByName(name: string): LocalTrack | undefined {
+    return this.tracks.get(name);
   }
 
   // Before any capture, so a viewer is never asked for camera or microphone access.
   private checkCanPublish() {
     if (this.room.isViewer) throw new Error(VIEWER_ERROR);
   }
+}
+
+/** The name the SDK publishes a source's (main) track under. */
+function defaultTrackName(source: TrackSource): string {
+  switch (source) {
+    case TrackSource.CAMERA:
+      return MAIN_CAMERA;
+    case TrackSource.MICROPHONE:
+      return "microphone";
+    case TrackSource.SCREEN:
+      return "screen";
+    case TrackSource.SCREEN_AUDIO:
+      return "screen-audio";
+  }
+  return "";
+}
+
+function sortCameras(names: string[]): string[] {
+  return names.sort((a, b) => Number(b === MAIN_CAMERA) - Number(a === MAIN_CAMERA) || a.localeCompare(b));
 }
 
 export { TrackKind, TrackSource };

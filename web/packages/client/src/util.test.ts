@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { CameraRenditions, codecForRenditions, Emitter, jwtClaims, participantNamespace, qualityIndex, RateMeter, retryDelay, ScreenRenditions, Serial } from "./util.ts";
+import { CameraPresets, CameraRenditions, cameraRenditions, cameraTrackName, codecForRenditions, Emitter, jwtClaims, participantNamespace, qualityIndex, RateMeter, retryDelay, ScreenRenditions, Serial } from "./util.ts";
 
 test("emitter on/once/off/next", async () => {
   class E extends Emitter<{ ping: [number] }> {
@@ -90,4 +90,16 @@ test("quality picks among any number of renditions", () => {
   expect(pick(4)).toEqual([0, 2, 3]);
   expect(pick(5)).toEqual([0, 2, 4]);
   expect(pick(0)).toEqual([0, 0, 0]);
+});
+
+test("extra cameras are named camera-<name>, with renditions after the name", () => {
+  expect(cameraTrackName()).toBe("camera");
+  expect(cameraTrackName("desk")).toBe("camera-desk");
+  for (const bad of ["Desk", "my desk", "a-b", "x".repeat(17)]) expect(() => cameraTrackName(bad)).toThrow("invalid camera name");
+  expect(cameraRenditions("720p")).toBe(CameraPresets["720p"].renditions);
+  const desk = cameraRenditions("720p", "camera-desk");
+  expect(desk.map((r) => r.trackName)).toEqual(["camera-desk-h", "camera-desk-m", "camera-desk-l"]);
+  expect(desk.map((r) => r.width)).toEqual(CameraPresets["720p"].renditions.map((r) => r.width));
+  // The main camera's renditions are not changed.
+  expect(CameraPresets["720p"].renditions[0].trackName).toBe("camera-h");
 });
