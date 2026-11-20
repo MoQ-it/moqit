@@ -5,16 +5,16 @@
 | Service | Role | Ports |
 |---|---|---|
 | `caddy` | HTTPS for the web app; obtains and renews a Let's Encrypt certificate | TCP 80, 443 |
-| `moqit` | the moqit node: WebTransport media and signalling, with Caddy's certificate | UDP 4443 |
+| `moqit` | the moqit node: WebTransport media and signalling, with Caddy's certificate, and the WebSocket fallback | UDP and TCP 4443 |
 | `meet` | serves the web app and mints access tokens | internal |
 
-Browsers load the app from `https://<domain>` and connect to the node at `https://<domain>:4443/moq` over WebTransport. WebTransport cannot pass through an HTTP proxy, so the node is reached directly on UDP with the same certificate; it re-reads the certificate when Caddy renews it.
+Browsers load the app from `https://<domain>` and connect to the node at `https://<domain>:4443/moq` over WebTransport. WebTransport cannot pass through an HTTP proxy, so the node is reached directly on UDP with the same certificate; it re-reads the certificate when Caddy renews it. Safari, every iOS browser, and browsers on networks that block UDP use `wss://<domain>:4443/moq` instead: the WebSocket fallback, on TCP at the same port.
 
 ## Requirements
 
 - A server with Docker (Compose v2) and a public IP address.
 - A DNS name pointing at it (an `A` and/or `AAAA` record), e.g. `meet.example.com`.
-- Open in the firewall: **TCP 80** and **TCP 443** (web app and certificate issuance) and **UDP 4443** (media).
+- Open in the firewall: **TCP 80** and **TCP 443** (web app and certificate issuance), **UDP 4443** (media) and **TCP 4443** (media over the WebSocket fallback).
 
 ## Start
 
@@ -42,7 +42,7 @@ sudo sysctl -w net.core.rmem_max=7500000 net.core.wmem_max=7500000
 | `MOQIT_API_SECRET` | — (required) | secret shared by Meet (signing tokens) and the node (verifying them) |
 | `MOQIT_API_KEY` | `meet` | the API key name |
 | `HTTP_PORT`, `HTTPS_PORT` | `80`, `443` | host ports for Caddy; Let's Encrypt needs 80 and 443 |
-| `MOQ_PORT` | `4443` | host UDP port for media; it is also the port in the URL browsers use |
+| `MOQ_PORT` | `4443` | host UDP and TCP port for media; it is also the port in the URL browsers use |
 | `CERT_ISSUER` | `acme-v02.api.letsencrypt.org-directory` | where Caddy stores the certificate; `local` for a `localhost` test |
 
 ## Updating
@@ -70,10 +70,10 @@ Rewinding is off in this setup. To turn it on, give the node a persistent volume
 
 ## Troubleshooting
 
-- **"Could not join" / WebTransport handshake failed:** UDP 4443 is blocked (cloud security groups often allow TCP only), or `MEET_DOMAIN` does not match the certificate. Check `docker compose logs moqit`.
+- **"Could not join":** UDP and TCP 4443 are both blocked, or `MEET_DOMAIN` does not match the certificate. Check `docker compose logs moqit`.
 - **No certificate:** DNS does not point at the server yet, or TCP 80/443 are blocked. Check `docker compose logs caddy`.
-- **A browser stays on "connecting…" or reports a timeout:** the error names the step that stalled. A failed WebTransport handshake is logged by the node as `webtransport upgrade failed`, with the browser's user agent.
-- **Some participants cannot connect:** networks that block UDP block QUIC; moqit has no TCP fallback yet.
+- **A browser stays on "connecting…" or reports a timeout:** the error names the step that stalled. A failed handshake is logged by the node as `webtransport upgrade failed` or `websocket upgrade failed`, with the browser's user agent.
+- **Some participants cannot connect:** networks that block UDP block QUIC. Browsers then fall back to a WebSocket on TCP 4443, if the firewall lets it through. Networks that allow only TCP 443 are not supported yet.
 
 ## Testing it locally
 

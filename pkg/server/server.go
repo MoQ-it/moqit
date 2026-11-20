@@ -1,6 +1,8 @@
 // Package server runs a moqit node: one UDP socket serving MoQ over
 // WebTransport (browsers, path /moq) and raw QUIC (native clients, other
-// nodes), with a room.Manager authorizing everything.
+// nodes), optionally a TCP socket on the same port serving MoQ over
+// WebSocket (browsers without WebTransport), with a room.Manager
+// authorizing everything.
 package server
 
 import (
@@ -16,6 +18,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/big"
 	mrand "math/rand/v2"
@@ -33,6 +36,7 @@ import (
 	"github.com/MoQ-it/moqit/pkg/service"
 	"github.com/MoQ-it/moqt"
 	"github.com/MoQ-it/moqt/transport/rawquic"
+	"github.com/MoQ-it/moqt/transport/ws"
 	"github.com/MoQ-it/moqt/transport/wt"
 	v22 "github.com/MoQ-it/moqt/wire/v22"
 	"github.com/quic-go/quic-go"
@@ -52,6 +56,10 @@ type Config struct {
 	// CertFile and KeyFile, if set, are used instead of Certificate and
 	// re-read when they change, so a renewed certificate needs no restart.
 	CertFile, KeyFile string
+	// WebSocket also serves /moq over WebSocket (TLS on TCP, the UDP
+	// port's number), for browsers whose WebTransport is missing or
+	// unreliable. Browsers must trust the certificate: hashes don't apply.
+	WebSocket bool
 
 	DepartureTimeout time.Duration
 	MaxParticipants  int
@@ -112,6 +120,7 @@ type Server struct {
 	keys           auth.KeyProvider
 	ln             *quic.EarlyListener
 	wts            *webtransport.Server
+	wss            *http.Server
 	cancel         context.CancelFunc
 }
 
@@ -226,6 +235,15 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		}
 	}()
 
+	var wss *http.Server
+	if cfg.WebSocket {
+		if wss, err = serveWebSocket(ctx, cfg.UDPAddr, ln.Addr(), certs, m, log); err != nil {
+			ln.Close()
+			cancel()
+			return nil, err
+		}
+	}
+
 	// The manager's own session dials this node over loopback, pinning our
 	// certificate.
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
@@ -235,11 +253,57 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	})
 	if err != nil {
 		ln.Close()
+		if wss != nil {
+			wss.Close()
+		}
 		cancel()
 		return nil, err
 	}
 	go certs.watch(ctx, log, func(h [32]byte) { m.SetCertSHA256(hex.EncodeToString(h[:])) })
-	return &Server{Manager: m, Addr: ln.Addr(), CertHash: certHash, publicURL: cfg.PublicURL, edge: cfg.Edge, exposeCertHash: cfg.ExposeCertHash, cluster: cfg.Cluster, keys: cfg.Keys, ln: ln, wts: wts, cancel: cancel}, nil
+	return &Server{Manager: m, Addr: ln.Addr(), CertHash: certHash, publicURL: cfg.PublicURL, edge: cfg.Edge, exposeCertHash: cfg.ExposeCertHash, cluster: cfg.Cluster, keys: cfg.Keys, ln: ln, wts: wts, wss: wss, cancel: cancel}, nil
+}
+
+// serveWebSocket listens on TCP at the UDP socket's host and port and
+// serves /moq over WebSocket.
+func serveWebSocket(ctx context.Context, udpAddr string, bound net.Addr, certs *certSource, m *room.Manager, log *slog.Logger) (*http.Server, error) {
+	host, _, err := net.SplitHostPort(udpAddr)
+	if err != nil {
+		return nil, err
+	}
+	_, port, _ := net.SplitHostPort(bound.String())
+	tcp, err := net.Listen("tcp", net.JoinHostPort(host, port))
+	if err != nil {
+		return nil, fmt.Errorf("websocket listener: %w", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/moq", func(w http.ResponseWriter, req *http.Request) {
+		conn, err := ws.Accept(w, req)
+		if err != nil {
+			log.Info("websocket upgrade failed", "remote", req.RemoteAddr, "user_agent", req.UserAgent(), "err", err)
+			return
+		}
+		if err := m.Serve(ctx, conn, req.URL.Query().Get("token")); err != nil {
+			log.Debug("session rejected", "remote", req.RemoteAddr, "err", err)
+		}
+	})
+	// HTTP/1.1 only: browsers upgrade to WebSocket from it.
+	tlsConf := &tls.Config{GetCertificate: certs.get, NextProtos: []string{"http/1.1"}}
+	hs := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelDebug)}
+	go hs.Serve(tls.NewListener(unsentListener{tcp}, tlsConf))
+	return hs, nil
+}
+
+// maxUnsent is how much a WebSocket's socket holds unsent.
+const maxUnsent = 64 << 10
+
+type unsentListener struct{ net.Listener }
+
+func (l unsentListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if tc, ok := c.(*net.TCPConn); ok {
+		limitUnsent(tc)
+	}
+	return c, err
 }
 
 // dialPeer opens a raw QUIC MoQ connection to a node, accepting only the
@@ -419,6 +483,9 @@ func (s *Server) Port() string {
 func (s *Server) Close() error {
 	s.cancel()
 	s.wts.Close()
+	if s.wss != nil {
+		s.wss.Close()
+	}
 	return s.ln.Close()
 }
 

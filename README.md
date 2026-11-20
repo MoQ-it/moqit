@@ -2,22 +2,23 @@
 
 **Real-time video conferencing over Media over QUIC.**
 
-moqit is a self-hostable platform for rooms with live audio, video, screen sharing and data, in the style of [LiveKit](https://livekit.io) — but built on the IETF's [Media over QUIC](https://datatracker.ietf.org/wg/moq/about/) (MoQ) instead of WebRTC. Browsers connect over WebTransport; a Go server relays tracks between participants, and nodes relay to each other the same way to form a cluster.
+moqit is a self-hostable platform for rooms with live audio, video, screen sharing and data, in the style of [LiveKit](https://livekit.io) — but built on the IETF's [Media over QUIC](https://datatracker.ietf.org/wg/moq/about/) (MoQ) instead of WebRTC. Browsers connect over WebTransport, or a WebSocket where that is missing or unreliable (Safari); a Go server relays tracks between participants, and nodes relay to each other the same way to form a cluster.
 
 It comes with a browser SDK, React components, a server API with webhooks, a Go SDK, and **Meet**, a ready-to-run conferencing web app.
 
-> **Status: experimental.** moqit implements MoQ Transport draft-22, which is still changing. It works in Chromium and Firefox and is tested end to end in both, but is not yet verified on Safari and has not been tested over real-world lossy networks or at scale. Expect breaking changes.
+> **Status: experimental.** moqit implements MoQ Transport draft-22, which is still changing. It works in Chromium and Firefox and is tested end to end in both (also over the WebSocket fallback in Chromium), but is not yet verified on Safari and has not been tested over real-world lossy networks or at scale. Expect breaking changes.
 
 ## Why MoQ?
 
 - **One protocol for everything.** Media, signalling and node-to-node relaying are all MoQ tracks over QUIC — no separate signalling socket, no RTP stack.
 - **Built to fan out.** MoQ relays forward named tracks like a CDN: one upstream subscription per track, however many viewers, across any number of nodes.
 - **Latency over completeness.** Each group of frames travels on its own QUIC stream, so a lost packet delays only that group, and a viewer who falls behind skips ahead instead of queueing old video.
-- **Simple to run.** One Go binary, one UDP port for WebTransport and node links, and Redis only when you cluster.
+- **Simple to run.** One Go binary, one UDP port for WebTransport and node links (plus the same TCP port for the WebSocket fallback), and Redis only when you cluster.
 
 ## Features
 
 - **Rooms, participants and tracks** with JWT access tokens and fine-grained grants
+- **WebSocket fallback** for browsers without working WebTransport, such as Safari, and for networks that block UDP
 - **Camera, microphone and screen sharing** (with tab or system audio), encoded with WebCodecs
 - **Simulcast** — up to three layers per camera, each encoded only while someone watches it
 - **Video codecs** — H.264, VP8, VP9 and AV1 (H.265 unverified), picked per device and switched live; each viewer receives one it can decode
@@ -27,6 +28,7 @@ It comes with a browser SDK, React components, a server API with webhooks, a Go 
 - **Lip-synced playout** with a jitter buffer; active speaker detection on the server
 - **Reliable and lossy data** to everyone or to specific participants, and room chat
 - **Device switching** of microphone, camera and speaker without republishing
+- **Extra cameras** — a participant can send a second view, such as a desk camera, beside the main one
 - **Track processors** for effects such as background blur and noise removal
 - **Server API** (Connect: JSON, protobuf or gRPC) and signed **webhooks**
 - **Go participant client** to join rooms and publish media from Go services
@@ -112,9 +114,9 @@ A node listens on one UDP port (WebTransport at `/moq`, plus raw QUIC for other 
 |---|---|
 | Chrome, Edge and other Chromium browsers | Supported, tested end to end |
 | Firefox | Supported, tested end to end (VP8 video by default) |
-| Safari 26.4+ | Not yet verified: a fix for joining awaits testing on macOS |
+| Safari (macOS and iOS), and every iOS browser | Not yet verified; uses the WebSocket fallback. Audio needs Safari 26+ (Opus `AudioEncoder`) |
 
-WebTransport is required; there is no WebSocket fallback.
+Browsers use WebTransport where it works and fall back to a WebSocket otherwise. Safari 26.4+ has WebTransport, but WebKit stalls long sessions ([bug 319818](https://bugs.webkit.org/show_bug.cgi?id=319818)), so WebKit browsers always use the WebSocket. See [docs/browser-sdk.md](docs/browser-sdk.md#transports).
 
 ## Documentation
 

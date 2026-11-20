@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { TrackInfoSchema, TrackKind, TrackSource } from "./gen/moqit/v1/models_pb.ts";
 import { resetCodecCaches } from "./codecs.ts";
 import { RemoteTrackPublication, RemoteVideoTrack } from "./remote.ts";
+import { RequestError } from "@moq-it/moqt";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -105,7 +106,7 @@ test("a subscription superseded while it was being set up is dropped", async () 
 
 // A publication of a camera in AV1 with an H.264 alternative, subscribed
 // through a session whose subscriptions never deliver.
-function publication(decodable: (codec: string) => boolean, encodings = [["camera-m.av1", "av01.0.05M.08"], ["camera-m.avc", "avc1.42e01f"]]) {
+function publication(decodable: (codec: string) => boolean, encodings = [["camera-m.av1", "av01.0.05M.08"], ["camera-m.avc", "avc1.42e01f"]], refuse?: (name: string) => boolean) {
   FakeDecoder.all = [];
   vi.stubGlobal("VideoDecoder", Object.assign(FakeDecoder, { isConfigSupported: async (c: VideoDecoderConfig) => ({ supported: decodable(c.codec) }) }));
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -114,6 +115,7 @@ function publication(decodable: (codec: string) => boolean, encodings = [["camer
   const session = {
     subscribe: async (track: { name: string }) => {
       subscribed.push(track.name);
+      if (refuse?.(track.name)) throw new RequestError(0x4, "no such participant");
       return { unsubscribe() {}, update: async () => {}, [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) };
     },
   };
@@ -186,4 +188,23 @@ test("a codec string changing under the same track reconfigures at the next Grou
   expect(subscribed).toEqual(["camera-m.avc"]);
   // Applied on the next Group, so the decoder in use keeps the old one until then.
   expect((pub.track as RemoteVideoTrack).codec).toBe("avc1.42e01f");
+});
+
+// Vitest fails the run on an unhandled rejection, which this used to leave.
+test("a rendition switch the server refuses (the publisher left meanwhile) keeps the current one and can be retried", async () => {
+  let refuse = true;
+  const { pub, subscribed, info } = publication(() => true, [["camera-m.avc", "avc1.42e01f"]], (name) => refuse && name !== "camera-m.avc");
+  await pub.setSubscribed(true);
+  pub.update(info([["camera-m.vp9", "vp09.00.10.08"], ["camera-m.avc", "avc1.42e01f"]]));
+  await settle();
+  await settle();
+  expect(subscribed).toEqual(["camera-m.avc", "camera-m.vp9"]);
+  expect(pub.currentTrackName).toBe("camera-m.avc");
+
+  // The next change tries the switch again.
+  refuse = false;
+  pub.update(info([["camera-m.vp9", "vp09.00.10.08"], ["camera-m.avc", "avc1.42e01f"], ["camera-m.vp8", "vp8"]]));
+  await settle();
+  expect(subscribed.at(-1)).toBe("camera-m.vp9");
+  expect(pub.currentTrackName).toBe("camera-m.vp9");
 });

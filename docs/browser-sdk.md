@@ -1,6 +1,6 @@
 # Browser SDK
 
-`@moqit/client` (`web/packages/client`) joins rooms from the browser over WebTransport; `@moqit/react` (`web/packages/react`) adds hooks and components.
+`@moqit/client` (`web/packages/client`) joins rooms from the browser over WebTransport, or a WebSocket where WebTransport is missing or unreliable (see [Transports](#transports)); `@moqit/react` (`web/packages/react`) adds hooks and components.
 
 ## Rooms, participants and tracks
 
@@ -20,7 +20,27 @@ await room.localParticipant.setScreenShareEnabled(true);
 await room.localParticipant.publishData(new TextEncoder().encode("hi"), { topic: "chat" });
 ```
 
-`connect` rejects if a step of joining stalls for longer than `timeoutMs` (default 10 s), with the step in the message, e.g. `timed out opening a WebTransport session to …` or `timed out announcing the participant`. In a browser without WebTransport it rejects with `this browser does not support WebTransport`.
+`connect` rejects if a step of joining stalls for longer than `timeoutMs` (default 10 s), with the step in the message, e.g. `timed out opening a WebTransport session to …` or `timed out announcing the participant`. If neither transport can connect it rejects with `could not connect to …`, naming each transport's error.
+
+## Transports
+
+`connect` picks the transport with its `transport` option:
+
+- `"auto"` (the default):
+  - WebKit browsers (Safari, and every browser on iOS) and browsers without WebTransport use a WebSocket. Safari 26.4+ has WebTransport, but WebKit never returns QUIC flow-control credit, so sessions stall after a few minutes ([WebKit bug 319818](https://bugs.webkit.org/show_bug.cgi?id=319818)).
+  - Other browsers use WebTransport. If it fails, or isn't ready within `webSocketDelayMs` (default 1000 ms), a WebSocket is tried alongside it, e.g. on networks that block UDP. The first to connect wins.
+- `"webtransport"`: only WebTransport.
+- `"websocket"`: only a WebSocket.
+
+```ts
+await room.connect(url, token, { transport: "websocket", webSocketUrl: "wss://media.example.com:4443/moq" });
+room.transport; // "webtransport" or "websocket"
+```
+
+The WebSocket URL defaults to the WebTransport URL with `wss://`: the node serves it on TCP at its UDP port. Limits of the WebSocket:
+- **Trusted certificate:** it can't use `serverCertificateHashes`, so the browser must trust the node's certificate. A `-dev` node's self-signed certificate works only over WebTransport.
+- **Head-of-line blocking:** all streams share one TCP connection, so a lost packet delays everything, not just one group. The SDK still sends the most urgent streams first and drops queued data of reset streams, so a congested viewer skips ahead.
+- **Untested under loss:** the congestion tests cover WebTransport only.
 
 Events follow LiveKit's: `participantConnected`, `trackPublished`, `trackSubscribed`, `trackMuted`, `activeSpeakersChanged`, `dataReceived`, `connectionStateChanged` and more (see `RoomEvents` in `room.ts`).
 
@@ -83,6 +103,30 @@ const cams = await Room.getLocalDevices("videoinput");
 await room.switchActiveDevice("videoinput", cams[1].deviceId); // a live track moves; before connecting, sets the device to use
 await room.switchActiveDevice("audiooutput", speakerId);       // Chromium and Firefox
 ```
+
+### Extra cameras
+
+A participant can send more than one camera, e.g. their face and a view of their desk. An extra camera has a name (1–16 of a-z, 0-9) and is published as its own track, `camera-<name>`, with renditions `camera-<name>-h|m|l`, beside the main camera (`camera`).
+
+```ts
+const [face, desk] = await Room.getLocalDevices("videoinput");
+await room.localParticipant.setCameraEnabled(true);                                          // the main camera
+await room.localParticipant.setCameraEnabled(true, undefined, { name: "desk", deviceId: desk.deviceId });
+room.localParticipant.cameraTrackNames();                    // ["camera", "camera-desk"]
+await room.localParticipant.setCameraEnabled(false, undefined, { name: "desk" });
+
+const bob = room.remoteParticipants.get("bob")!;
+bob.cameraTrackNames();                                      // ["camera", "camera-desk"]
+bob.getTrackPublicationByName("camera-desk");                // its publication; pub.name is "camera-desk"
+bob.getTrackPublication(TrackSource.CAMERA);                 // still the main camera
+```
+
+- **The main camera stays "the" camera:** `getTrack` / `getTrackPublication(TrackSource.CAMERA)` return it when it is published, and device switching (`switchActiveDevice`), processors (`setProcessor`) and `videoCodec` apply to it only.
+- **Shared settings:** `setCameraResolution` and `setVideoCodec` apply to every camera.
+- **Device:** without `deviceId`, an extra camera opens the camera chosen with `switchActiveDevice`.
+- **React:** `ParticipantTile` takes a `trackName` and labels the tile "name · desk"; `useVideoTrack(p, source, trackName)` and `useCameraTrackNames(p)` follow. `GridLayout` gives each camera a tile, `FocusLayout` lists every camera in its strip, and pins (`Pin.trackName`) can put an extra camera on the stage.
+
+Tested in Chrome (a second device) and Firefox (the same device opened twice).
 
 ## Quality and stats
 
@@ -171,7 +215,7 @@ await room.localParticipant.setProcessor(TrackSource.CAMERA, blur); // kept when
 **Publishing:**
 - **Capture:** `MediaStreamTrackProcessor` in Chromium; `requestVideoFrameCallback` plus `new VideoFrame(video)` in Firefox and Safari.
 - **Video codec:** the most efficient one this device encodes well, with alternatives (see [Video codecs](#video-codecs)).
-- **Simulcast on demand:** each rendition (`camera-h`, `-m`, `-l`; `screen-h`, `-l`) in each codec (`camera-h.av1`) is encoded only while someone subscribes to it.
+- **Simulcast on demand:** each rendition (`camera-h`, `-m`, `-l`; `screen-h`, `-l`; an extra camera's `camera-desk-h`, ...) in each codec (`camera-h.av1`) is encoded only while someone subscribes to it.
 - **Groups and keyframes:** each GOP is a MoQ Group; NEW_GROUP_REQUEST forces a keyframe.
 - **Audio:** an AudioWorklet slices it into 20 ms Opus frames, one Group per frame, with a LOC audio-level property.
 

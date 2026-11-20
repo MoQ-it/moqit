@@ -74,12 +74,25 @@ export function useViewerCount(): number {
   return room.numViewers;
 }
 
-/** The video track of a participant for a source, local or remote. */
-export function useVideoTrack(p: Participant, source: TrackSource = TrackSource.CAMERA): LocalVideoTrack | RemoteVideoTrack | undefined {
+/**
+ * The video track of a participant for a source, local or remote; with
+ * trackName, that track (e.g. an extra camera, "camera-desk").
+ */
+export function useVideoTrack(p: Participant, source: TrackSource = TrackSource.CAMERA, trackName?: string): LocalVideoTrack | RemoteVideoTrack | undefined {
   useRoomUpdates();
-  if (p.isLocal) return (p as LocalParticipant).getTrack(source) as LocalVideoTrack | undefined;
-  const t = (p as RemoteParticipant).getTrackPublication(source)?.track;
+  if (p.isLocal) {
+    const lp = p as LocalParticipant;
+    return (trackName ? lp.getTrackByName(trackName) : lp.getTrack(source)) as LocalVideoTrack | undefined;
+  }
+  const rp = p as RemoteParticipant;
+  const t = (trackName ? rp.getTrackPublicationByName(trackName) : rp.getTrackPublication(source))?.track;
   return t && "attach" in t ? (t as RemoteVideoTrack) : undefined;
+}
+
+/** A participant's published cameras' track names, the main one ("camera") first. */
+export function useCameraTrackNames(p: Participant): string[] {
+  useRoomUpdates();
+  return p.isLocal ? (p as LocalParticipant).cameraTrackNames() : (p as RemoteParticipant).cameraTrackNames();
 }
 
 /** A participant's audio level (0..1), sampled ten times a second. */

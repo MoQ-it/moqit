@@ -37,6 +37,7 @@ const (
 func main() {
 	dev := flag.Bool("dev", false, "development mode: dev API key, self-signed certificate, /v1/dev/token")
 	udpAddr := flag.String("udp", ":4443", "UDP address for MoQ (WebTransport path /moq and raw QUIC)")
+	webSocket := flag.Bool("websocket", true, "also serve MoQ over WebSocket (path /moq) on TCP at the -udp port, for browsers without working WebTransport such as Safari")
 	httpAddr := flag.String("http", ":7880", "HTTP address for health checks (and dev tokens)")
 	keysFlag := flag.String("keys", os.Getenv("MOQIT_KEYS"), "API keys as key:secret,key2:secret2 (env MOQIT_KEYS)")
 	certFile := flag.String("cert", "", "TLS certificate file")
@@ -65,6 +66,7 @@ func main() {
 	clusterCfg = clusterFlags{*redisURL, *nodeID, *advertise, *publicURL, *region}
 	edgeNode, viewerCap, edgeTier = *edge, *maxViewers, *tier
 	qlogPath = *qlogDir
+	webSocketOn = *webSocket
 	dvrCfg = dvrFlags{*dvrDir, *dvrWindow, *dvrMaxWindow, *dvrMaxBytes, *dvrMaxHeight, *dvrFetchLimit}
 
 	level := slog.LevelInfo
@@ -112,7 +114,7 @@ func run(log *slog.Logger, dev bool, udpAddr, httpAddr, keysFlag, certFile, keyF
 
 	cfg := server.Config{UDPAddr: udpAddr, Keys: keys, Certificate: cert, CertFile: certFile, KeyFile: keyFile, DepartureTimeout: departure, Logger: log,
 		AdvertiseAddr: clusterCfg.advertise, PublicURL: clusterCfg.publicURL, Region: clusterCfg.region, ExposeCertHash: dev,
-		Edge: edgeNode, Tier: edgeTier, MaxViewers: viewerCap, QlogDir: qlogPath}
+		Edge: edgeNode, Tier: edgeTier, MaxViewers: viewerCap, QlogDir: qlogPath, WebSocket: webSocketOn}
 	if edgeNode && clusterCfg.redis == "" {
 		return errors.New("-edge needs -redis")
 	}
@@ -192,6 +194,8 @@ func run(log *slog.Logger, dev bool, udpAddr, httpAddr, keysFlag, certFile, keyF
 type clusterFlags struct{ redis, nodeID, advertise, publicURL, region string }
 
 var webhookURLs string
+
+var webSocketOn bool
 
 // firstKey is the key webhooks are signed with: the first -keys entry, or
 // the dev key.

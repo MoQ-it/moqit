@@ -2,8 +2,9 @@ import { create } from "@bufbuild/protobuf";
 import { encodeMessage, MsgType } from "@moq-it/moqt";
 import { afterEach, expect, test, vi } from "vitest";
 import { ParticipantInfoSchema, TrackInfoSchema, TrackKind, TrackSource } from "./gen/moqit/v1/models_pb.ts";
+import { LocalVideoTrack } from "./local.ts";
 import { RemoteAudioTrack, type RemoteVideoTrack } from "./remote.ts";
-import { ConnectionState, RemoteParticipant, Room } from "./room.ts";
+import { ConnectionState, LocalParticipant, RemoteParticipant, Room } from "./room.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -89,4 +90,32 @@ test("a participant's volume applies to its audio, only that source, and survive
   expect(new RemoteParticipant(create(ParticipantInfoSchema, { identity: "carol", sid: "s3" }), room).getVolume()).toBe(1);
   again.setVolume(1);
   expect(bob.getVolume()).toBe(1);
+});
+
+test("with extra cameras, the main camera is still the participant's camera, local and remote", () => {
+  const room = new Room({ disconnectOnPageLeave: false, autoSubscribe: false });
+  // The extra camera is listed first: lookups by source still find the main one.
+  const desk = create(TrackInfoSchema, { sid: "t1", kind: TrackKind.VIDEO, source: TrackSource.CAMERA, name: "camera-desk" });
+  const face = create(TrackInfoSchema, { sid: "t2", kind: TrackKind.VIDEO, source: TrackSource.CAMERA, name: "camera" });
+  const info = create(ParticipantInfoSchema, { identity: "bob", sid: "s1", tracks: [desk, face] });
+  const bob = new RemoteParticipant(info, room);
+  bob.syncTracks(info);
+  expect(bob.getTrackPublication(TrackSource.CAMERA)!.sid).toBe("t2");
+  expect(bob.getTrackPublicationByName("camera-desk")!.sid).toBe("t1");
+  expect(bob.getTrackPublicationByName("camera-garden")).toBeUndefined();
+  expect(bob.cameraTrackNames()).toEqual(["camera", "camera-desk"]);
+
+  // Only an extra camera: it is the one found by source.
+  const onlyDesk = create(ParticipantInfoSchema, { identity: "carol", sid: "s2", tracks: [desk] });
+  const carol = new RemoteParticipant(onlyDesk, room);
+  carol.syncTracks(onlyDesk);
+  expect(carol.getTrackPublication(TrackSource.CAMERA)!.name).toBe("camera-desk");
+
+  const local = new LocalParticipant(create(ParticipantInfoSchema, { identity: "me" }), new Room({ disconnectOnPageLeave: false, adaptiveSend: false }));
+  const fake = (name?: string) => Object.assign(Object.create(LocalVideoTrack.prototype), { source: TrackSource.CAMERA, name_: name }) as LocalVideoTrack;
+  local.tracks.set("camera-desk", fake("camera-desk"));
+  local.tracks.set("camera", fake());
+  expect(local.getTrack(TrackSource.CAMERA)!.name).toBe("camera");
+  expect(local.getTrackByName("camera-desk")!.name).toBe("camera-desk");
+  expect(local.cameraTrackNames()).toEqual(["camera", "camera-desk"]);
 });

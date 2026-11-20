@@ -65,6 +65,10 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
   get source(): TrackSource {
     return this.info.source;
   }
+  /** The publisher's name for the track, e.g. "camera" or "camera-desk". */
+  get name(): string {
+    return this.info.name;
+  }
   get muted(): boolean {
     return this.info.muted;
   }
@@ -210,8 +214,16 @@ export class RemoteTrackPublication extends Emitter<PublicationEvents> {
       if (next.codec !== track.codec) track.setCodec(next.codec); // e.g. a level raised for a larger size
       return;
     }
+    const prev = this.current;
     this.current = next.trackName;
-    await track.switchTo(next.trackName, next.codec);
+    try {
+      await track.switchTo(next.trackName, next.codec);
+    } catch (e) {
+      // Refused, e.g. the publisher left meanwhile: the old rendition stays
+      // subscribed, and the next apply tries again.
+      if (this.current === next.trackName) this.current = prev;
+      if (!(e instanceof RequestError) && !this.closed) console.warn("moqit: switching rendition failed", e);
+    }
   }
 
   // The decoder fails on every keyframe in this codec: try another one.

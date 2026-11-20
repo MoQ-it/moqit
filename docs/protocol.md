@@ -1,6 +1,6 @@
 # How a room works over MoQ
 
-moqit speaks [MoQ Transport draft-22](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) (ALPN `moqt-22`), implemented in [moqt](https://github.com/MoQ-it/moqt). Media uses the [LOC](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) container and an [MSF](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) catalog. Everything is a MoQ track, so signalling needs no separate WebSocket:
+moqit speaks [MoQ Transport draft-22](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) (ALPN `moqt-22`), implemented in [moqt](https://github.com/MoQ-it/moqt), over WebTransport, raw QUIC, or a [WebSocket](#over-websocket). Media uses the [LOC](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) container and an [MSF](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) catalog. Everything is a MoQ track, so signalling needs no separate WebSocket:
 
 | Namespace / track | Direction | Content |
 |---|---|---|
@@ -13,7 +13,7 @@ moqit speaks [MoQ Transport draft-22](https://datatracker.ietf.org/doc/draft-iet
 
 Messages are defined in `proto/moqit/v1`.
 
-A participant declares its tracks in `SetTracks`. Each `TrackInfo` lists its renditions, largest first, and their MoQ track names. A camera may have any number of renditions named `camera-<anything>`: browsers use `camera-h|m|l`, the [RTMP ingress](https://github.com/MoQ-it/moqit-ingress) `camera-<height>`. For audio, `TrackInfo.channels` is 2 for stereo; 0 or 1 is mono.
+A participant declares its tracks in `SetTracks`. Each `TrackInfo` lists its renditions, largest first, and their MoQ track names. A camera may have any number of renditions named `camera-<anything>`: browsers use `camera-h|m|l`, the [RTMP ingress](https://github.com/MoQ-it/moqit-ingress) `camera-<height>`. A participant may publish several cameras, each its own `TrackInfo` with a unique name; browsers name an extra camera `camera-<name>`, with renditions `camera-<name>-h|m|l`. MoQ track names must be unique across all of a participant's tracks. For audio, `TrackInfo.channels` is 2 for stereo; 0 or 1 is mono.
 
 ## Video codecs
 
@@ -83,3 +83,23 @@ Subscribing to `dvr` is refused.
 - Edges below tier 1 forward through their parent edge.
 
 History outlives the participant: it stays fetchable after they leave or move nodes, until the room's window passes. After a move, the index minute in which the move happened lists only the new node's checkpoints. The media of both nodes stays fetchable.
+
+## Over WebSocket
+
+Browsers without working WebTransport connect to `wss://<host>:<port>/moq`, on TCP at the node's UDP port, with WebSocket subprotocol `moqt-22+ws`. The token goes in the SETUP option or `?token=`, as over WebTransport. Each binary message carries one QUIC-style frame, with QUIC varints:
+
+| Frame | Type | Fields |
+|---|---|---|
+| STREAM | `0x08`, `0x09` with FIN | stream ID, data to the end of the message |
+| RESET_STREAM | `0x04` | stream ID, error code |
+| STOP_SENDING | `0x05` | stream ID, error code |
+| DATAGRAM | `0x30` | payload to the end of the message |
+| CONNECTION_CLOSE | `0x1d` | error code, reason to the end of the message |
+
+- **Stream IDs** are numbered as in QUIC: bit 0 is set for streams the server opens, bit 1 for unidirectional ones. A frame for a new stream opens every lower one of its kind.
+- **No offsets or flow control:** a stream's data arrives in order, and TCP's flow control replaces QUIC's.
+- **Scheduling:** both ends send at most 16 KiB of a stream at a time, most urgent stream first. A reset drops data not yet written to the socket.
+- **Datagrams** are dropped when too many wait for the socket.
+- **Idle peers:** the server pings every 5 s and closes a connection that doesn't answer within 15 s.
+
+The format is moqit's own, implemented in moqt's `transport/ws` (Go) and `websocket.ts` (TypeScript). It resembles the [QMux](https://datatracker.ietf.org/doc/draft-ietf-quic-qmux/) draft, but is not compatible with it.

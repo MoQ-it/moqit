@@ -45,11 +45,13 @@ type result struct {
 	// Codec switches and the decoder fallback, as the page saw them.
 	CodecSwitches string `json:"codecSwitches"`
 	CodecFallback string `json:"codecFallback"`
+	// The extra (desk) camera as Bob decoded it.
+	Desk string `json:"desk"`
 }
 
 type launcher func(url, dir string) *exec.Cmd
 
-func chrome(t *testing.T) launcher {
+func chrome(t *testing.T, flags ...string) launcher {
 	bin, err := exec.LookPath("google-chrome")
 	if err != nil {
 		t.Skip("google-chrome not installed")
@@ -69,13 +71,22 @@ func chrome(t *testing.T) launcher {
 				time.Sleep(200 * time.Millisecond)
 			}
 		})
-		return exec.Command(bin, "--headless=new", "--no-sandbox", "--user-data-dir="+prof,
-			"--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required", url)
+		args := append([]string{"--headless=new", "--no-sandbox", "--user-data-dir=" + prof,
+			"--use-fake-device-for-media-stream=device-count=2", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"}, flags...)
+		return exec.Command(bin, append(args, url)...)
 	}
 }
 
 func TestChrome(t *testing.T)  { run(t, chrome(t), false) }
 func TestFirefox(t *testing.T) { run(t, firefox(t), false) }
+
+// TestChromeWebSocket keeps Alice on WebTransport and puts Bob and the
+// viewer Carol on the WebSocket fallback, as Safari would be. A WebSocket
+// can't use certificate hashes, so Chrome is told to accept the node's
+// self-signed certificate.
+func TestChromeWebSocket(t *testing.T) {
+	runWith(t, chrome(t, "--ignore-certificate-errors"), false, "websocket")
+}
 
 // The cluster variants put Alice and Bob on different nodes, so all media
 // and signalling crosses the node-to-node link, and the viewer Carol on an
@@ -132,7 +143,7 @@ func viewerToken(t *testing.T, identity string) string {
 }
 
 // node starts a moqit node, joined to a cluster when rdb is set; an edge
-// node serves viewers only.
+// node serves viewers only. Every node also serves WebSocket.
 func node(t *testing.T, ctx context.Context, rdb *redis.Client, id string, edge bool) *server.Server {
 	t.Helper()
 	cert, err := server.SelfSignedCert("localhost,127.0.0.1,::1")
@@ -140,7 +151,7 @@ func node(t *testing.T, ctx context.Context, rdb *redis.Client, id string, edge 
 		t.Fatal(err)
 	}
 	cfg := server.Config{UDPAddr: "127.0.0.1:0", Keys: auth.KeyProvider{apiKey: apiSecret}, Certificate: cert,
-		ViewerInterval: 500 * time.Millisecond, Edge: edge}
+		ViewerInterval: 500 * time.Millisecond, Edge: edge, WebSocket: true}
 	if !edge {
 		store, err := dvr.Open(dvr.Config{Dir: t.TempDir()})
 		if err != nil {
@@ -167,7 +178,11 @@ func node(t *testing.T, ctx context.Context, rdb *redis.Client, id string, edge 
 	return srv
 }
 
-func run(t *testing.T, browser launcher, clustered bool) {
+func run(t *testing.T, browser launcher, clustered bool) { runWith(t, browser, clustered, "") }
+
+// runWith runs the page with Bob and Carol on the given transport ("" for
+// the SDK's choice).
+func runWith(t *testing.T, browser launcher, clustered bool, transport string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
@@ -193,6 +208,7 @@ func run(t *testing.T, browser launcher, clustered bool) {
 			"aliceToken":    token(t, "alice"),
 			"bobToken":      token(t, "bob"),
 			"carolToken":    viewerToken(t, "carol"),
+			"transport":     transport,
 		})
 	})
 	// The page asks for a server-side mute through the RoomService API.
@@ -217,6 +233,7 @@ func run(t *testing.T, browser launcher, clustered bool) {
 	t.Logf("video high %s, low %s; %s", res.High, res.Low, res.Latency)
 	t.Logf("rewind: %s", res.Rewind)
 	t.Logf("codecs: %s; switches: %s; decoder fallback: %s", res.Codecs, res.CodecSwitches, res.CodecFallback)
+	t.Logf("desk camera: %s", res.Desk)
 }
 
 // browse bundles a page from this directory, serves it with mux's

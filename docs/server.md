@@ -3,7 +3,7 @@
 ## Running a node
 
 ```sh
-go run ./cmd/moqit-server -dev            # UDP :4443 (WebTransport /moq + raw QUIC), HTTP :7880
+go run ./cmd/moqit-server -dev            # UDP :4443 (WebTransport /moq + raw QUIC), TCP :4443 (WebSocket /moq), HTTP :7880
 curl 'http://localhost:7880/v1/dev/token?room=demo&identity=alice'
 go run ./cmd/moqit token -room demo -identity bob -sources microphone
 ```
@@ -13,7 +13,7 @@ go run ./cmd/moqit token -room demo -identity bob -sources microphone
 - creates a self-signed 13-day certificate and logs its SHA-256, for WebTransport `serverCertificateHashes`;
 - enables `/v1/dev/token`.
 
-In production, pass `-keys key:secret` and `-cert`/`-key`. `-max-viewers` caps viewer sessions on a node, `-edge` makes it an edge node and `-tier` places an edge in a cascade (see [clustering.md](clustering.md#edge-nodes-and-viewers)). The certificate files are re-read when they change, so a renewed certificate (e.g. from an ACME client) needs no restart; until they exist the server waits for them. Run `moqit-server -h` for all flags.
+In production, pass `-keys key:secret` and `-cert`/`-key`. The node also serves `/moq` over WebSocket on TCP at the `-udp` port, for browsers without working WebTransport (see [browser-sdk.md](browser-sdk.md#transports)); `-websocket=false` turns that off. Browsers accept the WebSocket only with a certificate they trust, so a `-dev` node's self-signed one works only over WebTransport. `-max-viewers` caps viewer sessions on a node, `-edge` makes it an edge node and `-tier` places an edge in a cascade (see [clustering.md](clustering.md#edge-nodes-and-viewers)). The certificate files are re-read when they change, so a renewed certificate (e.g. from an ACME client) needs no restart; until they exist the server waits for them. Run `moqit-server -h` for all flags.
 
 ### Rewind (DVR)
 
